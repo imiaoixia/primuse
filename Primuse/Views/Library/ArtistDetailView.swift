@@ -504,7 +504,8 @@ struct ArtistDetailView: View {
         }
     }
 
-    /// 矮信息带的底图:头像虚化铺满, 往下化进整页底色。
+    /// 矮信息带的底图:头像虚化铺满, 往下渐隐成透明, 露出整页的网格底色 ——
+    /// 页面接下去就是那张底色, 所以看不出头图在哪儿结束。
     private var compactBackdrop: some View {
         GeometryReader { geometry in
             ArtistArtworkView(
@@ -517,21 +518,25 @@ struct ArtistDetailView: View {
             .opacity(0.78)
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
-        .background(tint.top)
-        .accessibilityHidden(true)
         .overlay {
-            // 头图往下化进整页底色, 而不是收在一块黑里 —— 页面接下去就是这个颜色,
-            // 所以看不出头图在哪儿结束。
+            LinearGradient(
+                colors: [.black.opacity(0.16), .clear],
+                startPoint: .top,
+                endPoint: .center
+            )
+        }
+        .mask {
             LinearGradient(
                 stops: [
-                    .init(color: .black.opacity(0.16), location: 0),
-                    .init(color: tint.top.opacity(0.42), location: 0.5),
-                    .init(color: tint.top, location: 1),
+                    .init(color: .black, location: 0),
+                    .init(color: .black.opacity(0.58), location: 0.5),
+                    .init(color: .clear, location: 1),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
         }
+        .accessibilityHidden(true)
     }
 
     private var iosTopSongs: some View {

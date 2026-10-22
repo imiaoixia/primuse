@@ -2594,19 +2594,16 @@ struct HomeView: View {
         return formatter.string(from: max(60, totalSec)) ?? "—"
     }
 
-    /// Soft gradient tinted background pulled from a song's cover.
-    /// Falls back to ultra-thin material when the tint hasn't been
+    /// Soft mesh background pulled from a song's cover: each region of
+    /// the cover tints the matching part of the card, strongest at the
+    /// top. Falls back to the plain card surface when the tint hasn't been
     /// extracted yet (or the cover failed to load) — gives every
     /// card a consistent shape without blocking on extraction.
     @ViewBuilder
     private func tintedCardBackground(for song: Song) -> some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        if let tint = tintProvider.tint(forSongID: song.id) {
-            shape.fill(LinearGradient(
-                colors: [tint.opacity(0.22), tint.opacity(0.06)],
-                startPoint: .top,
-                endPoint: .bottom
-            ))
+        if let mesh = tintProvider.cardMesh(forSongID: song.id) {
+            shape.fill(mesh.gradient(strongest: 0.22, weakest: 0.06, falloff: .vertical))
         } else {
             shape.fill(homeCardSurface)
         }
@@ -2728,19 +2725,15 @@ struct HomeView: View {
         }
     }
 
-    /// Hero background gradient: same per-song tint pattern as the
+    /// Hero background mesh: same per-song cover mesh as the
     /// list cards but stronger (Hero's bigger surface = bigger
     /// visual presence, can carry more saturation). Falls back to
     /// thinMaterial while extraction is pending.
     /// 返回 ShapeStyle 而不是 View, 让 RoundedRectangle.fill(_:) 能直接接住。
     /// (View 不能传给 fill, fill 要 ShapeStyle。)
     private func heroTintGradient(for song: Song) -> AnyShapeStyle {
-        if let tint = tintProvider.tint(forSongID: song.id) {
-            return AnyShapeStyle(LinearGradient(
-                colors: [tint.opacity(0.32), tint.opacity(0.10)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ))
+        if let mesh = tintProvider.cardMesh(forSongID: song.id) {
+            return AnyShapeStyle(mesh.gradient(strongest: 0.32, weakest: 0.10))
         } else {
             return AnyShapeStyle(Material.thin)
         }

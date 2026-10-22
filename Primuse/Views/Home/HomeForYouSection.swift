@@ -647,14 +647,9 @@ struct HomeForYouSection: View {
     @ViewBuilder
     private func cardBackground(forSongID songID: String) -> some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
-        if let tint = tintProvider.tint(forSongID: songID) {
-            shape.fill(
-                LinearGradient(
-                    colors: [tint.opacity(0.28), tint.opacity(0.08)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+        if let mesh = tintProvider.cardMesh(forSongID: songID) {
+            // 封面分块色铺成网格，左上浓、右下淡。
+            shape.fill(mesh.gradient(strongest: 0.28, weakest: 0.08))
         } else {
             // Repeated live Material blurs create off-screen render passes
             // while the horizontal row moves. A stable system surface keeps

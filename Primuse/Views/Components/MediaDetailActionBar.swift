@@ -15,47 +15,87 @@ struct ImmersiveLibraryDetailInsets: Equatable {
     var trailing: CGFloat = 0
 }
 
+/// 详情页头图里的版式尺寸。
+enum LibraryDetailHeroMetrics {
+    /// 封面下面的标题、按钮、简介、评分在 iPad 这类宽画布上收进这么宽的一栏居中，
+    /// 不跟着整幅屏幕拉成几条长胶囊；手机屏比它窄，不受影响。
+    static let readableWidth: CGFloat = 600
+}
+
 #if os(iOS)
 /// 详情页那层随封面变化的整页底色。
 ///
 /// 封面主色不能直接铺满一页：饱和度高的封面会刺眼，亮封面上白字会糊。怎么压深由
-/// `LibraryDetailTintPolicy` 定(规则在 PrimuseKit 里，有测试)，这里只把算好的两段
-/// 颜色接成渐变。头图、列表、页尾共用同一条渐变，页面才是一整块，而不是彩色头顶
-/// 着一块灰底。
+/// `LibraryDetailTintPolicy` 定(规则在 PrimuseKit 里，有测试)。整页底色是一张网格渐变：
+/// 封面切成 3×3 块各取一色、逐点压深，左上偏红、右下偏蓝这样的走向留在页面上，
+/// 不再只是一种颜色从上到下由浅到深。头图、列表、页尾共用这一张，页面才是一整块，
+/// 而不是彩色头顶着一块灰底。
 struct LibraryDetailTintStyle: Equatable {
+    /// 封面主色压深后的页首、页尾两色。按钮字色、紧凑头图这些要一种颜色的地方用它们。
     var top: Color
     var bottom: Color
+    /// 网格底色的格点颜色，行优先排成 `LibraryDetailMeshTint.columns × rows`。
+    var meshColors: [Color]
 
-    /// 上半屏保持头图收尾的那个颜色, 过了头图才慢慢变深 —— 否则头图末端与页面底色
-    /// 在接缝处差着一截, 反而多出一条边。
-    var gradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: top, location: 0),
-                .init(color: top, location: 0.42),
-                .init(color: bottom, location: 1),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
+    /// 格点的位置：中间一行提到头图下沿附近 —— 上半屏保持头图收尾的那几种颜色，过了头图
+    /// 才慢慢变深，头图末端和页面底色之间不会差着一截。中间一列左右错开一点，过渡不是一条直线。
+    static let meshPoints: [SIMD2<Float>] = [
+        [0, 0], [0.5, 0], [1, 0],
+        [0, 0.42], [0.54, 0.46], [1, 0.4],
+        [0, 1], [0.5, 1], [1, 1],
+    ]
+
+    @MainActor
+    var mesh: MeshGradient {
+        MeshGradient(
+            width: LibraryDetailMeshTint.columns,
+            height: LibraryDetailMeshTint.rows,
+            points: Self.meshPoints,
+            colors: meshColors
         )
     }
 
     /// 取不到封面色时的中性底。取色是异步的，颜色到位之前也先用它。
     static func neutral(colorScheme: ColorScheme) -> LibraryDetailTintStyle {
-        style(LibraryDetailTintPolicy.neutralTint(appearance: appearance(for: colorScheme)))
+        let pageAppearance = appearance(for: colorScheme)
+        return style(
+            LibraryDetailTintPolicy.neutralTint(appearance: pageAppearance),
+            mesh: LibraryDetailTintPolicy.neutralMeshTint(appearance: pageAppearance)
+        )
     }
 
-    /// - Parameter artworkColor: `CoverTintProvider` 取到的封面主色。
-    static func artwork(_ artworkColor: Color?, colorScheme: ColorScheme) -> LibraryDetailTintStyle {
+    /// - Parameters:
+    ///   - artworkColor: `CoverTintProvider` 取到的封面主色。
+    ///   - regions: 同一张封面的分块色；没有时(比如风格页拿固定配色兜底)整张网格都用主色。
+    static func artwork(
+        _ artworkColor: Color?,
+        regions: [LibraryDetailTintStop?]? = nil,
+        colorScheme: ColorScheme
+    ) -> LibraryDetailTintStyle {
         guard let artworkColor, let components = artworkColor.hsbComponents else {
             return neutral(colorScheme: colorScheme)
         }
-        return style(LibraryDetailTintPolicy.tint(
+        let pageAppearance = appearance(for: colorScheme)
+        let dominant = LibraryDetailTintStop(
             hue: components.hue,
             saturation: components.saturation,
-            brightness: components.brightness,
-            appearance: appearance(for: colorScheme)
-        ))
+            brightness: components.brightness
+        )
+        return style(
+            LibraryDetailTintPolicy.tint(
+                hue: components.hue,
+                saturation: components.saturation,
+                brightness: components.brightness,
+                appearance: pageAppearance
+            ),
+            mesh: LibraryDetailTintPolicy.meshTint(
+                regions: regions ?? Array(repeating: dominant, count: LibraryDetailMeshTint.stopCount),
+                hue: components.hue,
+                saturation: components.saturation,
+                brightness: components.brightness,
+                appearance: pageAppearance
+            )
+        )
     }
 
     private static func appearance(
@@ -64,8 +104,12 @@ struct LibraryDetailTintStyle: Equatable {
         colorScheme == .dark ? .dark : .light
     }
 
-    private static func style(_ tint: LibraryDetailTint) -> LibraryDetailTintStyle {
-        LibraryDetailTintStyle(top: color(tint.top), bottom: color(tint.bottom))
+    private static func style(_ tint: LibraryDetailTint, mesh: LibraryDetailMeshTint) -> LibraryDetailTintStyle {
+        LibraryDetailTintStyle(
+            top: color(tint.top),
+            bottom: color(tint.bottom),
+            meshColors: mesh.stops.map { color($0) }
+        )
     }
 
     private static func color(_ stop: LibraryDetailTintStop) -> Color {
@@ -113,7 +157,11 @@ private struct LibraryDetailTintModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
     private var style: LibraryDetailTintStyle {
-        .artwork(song.flatMap { coverTints.tint(forSongID: $0.id) }, colorScheme: colorScheme)
+        .artwork(
+            song.flatMap { coverTints.tint(forSongID: $0.id) },
+            regions: song.flatMap { coverTints.meshRegions(forSongID: $0.id) },
+            colorScheme: colorScheme
+        )
     }
 
     func body(content: Content) -> some View {
@@ -244,7 +292,7 @@ struct ImmersiveLibraryDetailScrollView<Header: View, Content: View>: View {
         }
         .background {
             if let tint {
-                tint.gradient.ignoresSafeArea()
+                tint.mesh.ignoresSafeArea()
             } else {
                 Color(.systemGroupedBackground).ignoresSafeArea()
             }

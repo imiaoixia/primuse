@@ -301,25 +301,28 @@ struct HomeHeroCarousel: View {
         .accessibilityAddTraits(isCentered ? .isSelected : [])
     }
 
-    /// 居中封面的取色在背后晕开一圈,换到下一张时跟着淡过去。
-    /// 椭圆贴着轮播的边框、到边上正好淡完,上下不留一道硬边。
+    /// 居中封面的分块取色铺成网格,在背后晕开一圈,换到下一张时跟着淡过去。
+    /// 椭圆遮罩贴着轮播的边框、到边上正好淡完,上下不留一道硬边。
     private func glow() -> some View {
-        let tint = centeredSong.flatMap { tintProvider.tint(forSongID: $0.id) }
+        let mesh = centeredSong.flatMap { tintProvider.cardMesh(forSongID: $0.id) }
         return ZStack {
-            if let centeredSong, let tint {
-                EllipticalGradient(
-                    colors: [tint.opacity(0.45), tint.opacity(0.18), tint.opacity(0)],
-                    center: .center,
-                    startRadiusFraction: 0,
-                    endRadiusFraction: 0.5
-                )
-                .id(centeredSong.id)
-                .transition(.opacity)
+            if let centeredSong, let mesh {
+                mesh.gradient(strongest: 0.45, weakest: 0.45, falloff: .uniform)
+                    .mask {
+                        EllipticalGradient(
+                            colors: [.black, .black.opacity(0.4), .clear],
+                            center: .center,
+                            startRadiusFraction: 0,
+                            endRadiusFraction: 0.5
+                        )
+                    }
+                    .id(centeredSong.id)
+                    .transition(.opacity)
             }
         }
         .pmAnimation(.ambient, value: centeredSong?.id)
         // 取色晚到一步时光晕也是淡进来,不是突然出现。
-        .pmAnimation(.ambient, value: tint == nil)
+        .pmAnimation(.ambient, value: mesh == nil)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

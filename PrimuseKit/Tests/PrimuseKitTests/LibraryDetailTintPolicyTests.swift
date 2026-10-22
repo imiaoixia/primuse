@@ -206,3 +206,198 @@ struct LibraryDetailTintPolicyTests {
         #expect(abs(gray.blue - 0.42) < 0.0001)
     }
 }
+
+/// 一张 `ArtworkMeshSampler.sampleWidth × sampleHeight` 的测试图：每个像素的颜色由坐标决定。
+private func samplePixels(
+    _ color: (_ x: Int, _ y: Int) -> (UInt8, UInt8, UInt8)
+) -> [UInt8] {
+    let width = ArtworkMeshSampler.sampleWidth
+    let height = ArtworkMeshSampler.sampleHeight
+    var pixels = [UInt8](repeating: 255, count: width * height * 4)
+    for y in 0..<height {
+        for x in 0..<width {
+            let (red, green, blue) = color(x, y)
+            let offset = (y * width + x) * 4
+            pixels[offset] = red
+            pixels[offset + 1] = green
+            pixels[offset + 2] = blue
+        }
+    }
+    return pixels
+}
+
+private func sampledRegions(_ pixels: [UInt8]) -> [LibraryDetailTintStop?] {
+    ArtworkMeshSampler.regions(
+        pixels: pixels,
+        width: ArtworkMeshSampler.sampleWidth,
+        height: ArtworkMeshSampler.sampleHeight,
+        bytesPerRow: ArtworkMeshSampler.sampleWidth * 4
+    )
+}
+
+@Suite("详情页网格底色")
+struct LibraryDetailMeshTintTests {
+    /// 色相环上挑几种颜色，按格点轮流摆，模拟一张颜色很杂的封面。
+    private func mixedRegions(offset: Int) -> [LibraryDetailTintStop?] {
+        let palette: [LibraryDetailTintStop?] = [
+            LibraryDetailTintStop(hue: 0.02, saturation: 0.9, brightness: 0.95),
+            LibraryDetailTintStop(hue: 0.16, saturation: 1.0, brightness: 1.0),
+            LibraryDetailTintStop(hue: 0.33, saturation: 0.7, brightness: 0.6),
+            nil,
+            LibraryDetailTintStop(hue: 0.58, saturation: 0.5, brightness: 0.2),
+            LibraryDetailTintStop(hue: 0.75, saturation: 0.04, brightness: 0.98),
+            LibraryDetailTintStop(hue: 0.9, saturation: 0.35, brightness: 0.05),
+        ]
+        return (0..<LibraryDetailMeshTint.stopCount).map { palette[($0 + offset) % palette.count] }
+    }
+
+    @Test("每个格点都够白字读", arguments: [
+        LibraryDetailTintPolicy.Appearance.light,
+        LibraryDetailTintPolicy.Appearance.dark,
+    ])
+    func everyStopIsReadable(appearance: LibraryDetailTintPolicy.Appearance) {
+        for offset in 0..<7 {
+            let mesh = LibraryDetailTintPolicy.meshTint(
+                regions: mixedRegions(offset: offset),
+                hue: 0.6,
+                saturation: 0.5,
+                brightness: 0.7,
+                appearance: appearance
+            )
+            #expect(mesh.stops.count == LibraryDetailMeshTint.stopCount)
+            for stop in mesh.stops {
+                let contrast = LibraryDetailTintPolicy.contrastRatioAgainstWhite(stop)
+                #expect(contrast >= LibraryDetailTintPolicy.minimumContrastRatio, "格点对比度不足: \(stop)")
+                #expect(stop.brightness > 0, "格点塌成纯黑: \(stop)")
+                #expect(stop.saturation <= 0.58)
+            }
+        }
+    }
+
+    @Test("有颜色的那一块保留自己的色相")
+    func chromaticRegionsKeepTheirHue() {
+        let regions = mixedRegions(offset: 0)
+        let mesh = LibraryDetailTintPolicy.meshTint(
+            regions: regions,
+            hue: 0.6,
+            saturation: 0.5,
+            brightness: 0.7,
+            appearance: .dark
+        )
+        for (region, stop) in zip(regions, mesh.stops) {
+            guard let region, region.saturation >= 0.08 else { continue }
+            #expect(abs(stop.hue - region.hue) < 0.0001)
+        }
+    }
+
+    @Test("读不出颜色的那一块沿用主色的色相，不冒出一块灰")
+    func achromaticRegionsFollowDominantHue() {
+        var regions = [LibraryDetailTintStop?](repeating: nil, count: LibraryDetailMeshTint.stopCount)
+        regions[0] = LibraryDetailTintStop(hue: 0.1, saturation: 0.02, brightness: 0.9)
+        let mesh = LibraryDetailTintPolicy.meshTint(
+            regions: regions,
+            hue: 0.62,
+            saturation: 0.6,
+            brightness: 0.5,
+            appearance: .dark
+        )
+        for stop in mesh.stops {
+            #expect(abs(stop.hue - 0.62) < 0.0001)
+            #expect(stop.saturation > 0.1)
+        }
+    }
+
+    @Test("同一列越往下越深")
+    func rowsGetDeeperTowardTheBottom() {
+        for hueStep in 0..<12 {
+            let region = LibraryDetailTintStop(hue: Double(hueStep) / 12, saturation: 0.6, brightness: 0.7)
+            let mesh = LibraryDetailTintPolicy.meshTint(
+                regions: Array(repeating: region, count: LibraryDetailMeshTint.stopCount),
+                hue: region.hue,
+                saturation: region.saturation,
+                brightness: region.brightness,
+                appearance: .light
+            )
+            for column in 0..<LibraryDetailMeshTint.columns {
+                for row in 1..<LibraryDetailMeshTint.rows {
+                    let upper = mesh.stop(column: column, row: row - 1)
+                    let lower = mesh.stop(column: column, row: row)
+                    #expect(lower.brightness < upper.brightness)
+                }
+            }
+        }
+    }
+
+    @Test("中性网格底色看不出偏色，个数不够的分块按读不出处理")
+    func neutralMeshIsAchromatic() {
+        for appearance in [LibraryDetailTintPolicy.Appearance.light, .dark] {
+            let neutral = LibraryDetailTintPolicy.neutralMeshTint(appearance: appearance)
+            #expect(neutral.stops.count == LibraryDetailMeshTint.stopCount)
+            for stop in neutral.stops {
+                #expect(stop.saturation <= 0.1)
+                let contrast = LibraryDetailTintPolicy.contrastRatioAgainstWhite(stop)
+                #expect(contrast >= LibraryDetailTintPolicy.minimumContrastRatio)
+            }
+        }
+        let short = LibraryDetailTintPolicy.meshTint(
+            regions: [LibraryDetailTintStop(hue: 0.3, saturation: 0.8, brightness: 0.8)],
+            hue: 0.3,
+            saturation: 0.8,
+            brightness: 0.8,
+            appearance: .dark
+        )
+        #expect(short.stops.count == LibraryDetailMeshTint.stopCount)
+    }
+
+    @Test("RGB 转 HSB 与 HSB 转 RGB 互逆")
+    func hsbRoundTrips() {
+        for hueStep in 0..<12 {
+            let stop = LibraryDetailTintStop(hue: Double(hueStep) / 12, saturation: 0.65, brightness: 0.8)
+            let rgb = LibraryDetailTintPolicy.rgbComponents(of: stop)
+            let back = LibraryDetailTintPolicy.hsbStop(red: rgb.red, green: rgb.green, blue: rgb.blue)
+            #expect(abs(back.hue - stop.hue) < 0.0001)
+            #expect(abs(back.saturation - stop.saturation) < 0.0001)
+            #expect(abs(back.brightness - stop.brightness) < 0.0001)
+        }
+        let gray = LibraryDetailTintPolicy.hsbStop(red: 0.4, green: 0.4, blue: 0.4)
+        #expect(gray.saturation == 0)
+        #expect(abs(gray.brightness - 0.4) < 0.0001)
+    }
+
+    @Test("分块取色按封面的位置排：左边红、右边蓝")
+    func samplerFollowsArtworkLayout() {
+        let pixels = samplePixels { x, _ in
+            x < ArtworkMeshSampler.sampleWidth / 2 ? (220, 30, 30) : (30, 40, 220)
+        }
+        let regions = sampledRegions(pixels)
+        #expect(regions.count == LibraryDetailMeshTint.stopCount)
+        for row in 0..<LibraryDetailMeshTint.rows {
+            let leading = regions[row * LibraryDetailMeshTint.columns]
+            let trailing = regions[row * LibraryDetailMeshTint.columns + LibraryDetailMeshTint.columns - 1]
+            #expect(leading.map { $0.hue < 0.05 || $0.hue > 0.95 } == true)
+            #expect(leading.map { $0.saturation > 0.7 } == true)
+            #expect(trailing.map { abs($0.hue - 0.66) < 0.05 } == true)
+        }
+    }
+
+    @Test("一块里大半是灰底时取出来的是那片鲜艳的颜色")
+    func samplerFavorsVividPixels() {
+        // 每一块左上角 3×3 是纯绿，其余是中灰。
+        let pixels = samplePixels { x, y in
+            x % ArtworkMeshSampler.cellSide < 3 && y % ArtworkMeshSampler.cellSide < 3
+                ? (20, 200, 40)
+                : (128, 128, 128)
+        }
+        for region in sampledRegions(pixels) {
+            #expect(region.map { abs($0.hue - 0.35) < 0.06 } == true)
+            #expect(region.map { $0.saturation > 0.24 } == true)
+        }
+    }
+
+    @Test("像素不够时每一块都读不出")
+    func samplerRejectsShortInput() {
+        let regions = ArtworkMeshSampler.regions(pixels: [0, 0, 0, 0], width: 24, height: 24, bytesPerRow: 96)
+        #expect(regions.count == LibraryDetailMeshTint.stopCount)
+        #expect(regions.allSatisfy { $0 == nil })
+    }
+}

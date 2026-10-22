@@ -404,6 +404,7 @@ struct TVSpokenWordBookDetailView: View {
             TVAmbientBackdrop(
                 tint: palette?.primary ?? TVColor.spokenWordSpace,
                 tint2: palette?.secondary ?? TVColor.bgDeep,
+                mesh: store.artworkMesh(forSongID: book.items.first?.id ?? ""),
                 strength: 0.55
             )
             TVColor.bg.opacity(0.34).ignoresSafeArea()

@@ -7,6 +7,8 @@ import PrimuseKit
 struct TVPlayerBackdrop: View {
     let tint: Color
     let tint2: Color
+    /// 封面分块色,色场铺成网格渐变;电台、取色前为 nil。
+    var mesh: [Color]? = nil
 
     @Environment(TVStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
@@ -32,7 +34,7 @@ struct TVPlayerBackdrop: View {
         )
         let frame = resolver.frame.flatMap { $0.source == source ? $0 : nil }
 
-        TVAmbientBackdrop(tint: tint, tint2: tint2, strength: 1, image: frame?.image, imageID: frame?.id)
+        TVAmbientBackdrop(tint: tint, tint2: tint2, mesh: mesh, strength: 1, image: frame?.image, imageID: frame?.id)
             .onChange(of: request, initial: true) { _, request in
                 resolver.update(request, store: store)
             }

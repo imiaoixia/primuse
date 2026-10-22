@@ -30,6 +30,9 @@ struct TVArtworkPalette: Codable, Equatable, Sendable {
 
     let primary: RGB
     let secondary: RGB
+    /// 封面切成 3×3 块各取的颜色(行优先,第 0 行是封面顶部),给背景的网格渐变用。
+    /// 已按主色、副色的明暗区间压过:顶行接近主色的亮度,末行接近副色。旧版缓存里没有,读出来是 nil。
+    var regions: [RGB]? = nil
 }
 
 /// 真实封面提色器。图片缩小、像素分析和落盘都在独立 actor / utility task 中完成，
@@ -100,7 +103,9 @@ actor TVArtworkPaletteLoader {
         let signature = Self.signature(of: data)
         latestSignature[artworkKey] = signature
 
-        if let cached = memoryCache[artworkKey], cached.signature == signature {
+        // 旧版缓存只有主色、副色,没有分块色:当作没缓存,重新取一次。
+        if let cached = memoryCache[artworkKey], cached.signature == signature,
+           cached.palette.regions != nil {
             return cached.palette
         }
 
@@ -109,7 +114,7 @@ actor TVArtworkPaletteLoader {
             if let storedData = try? Data(contentsOf: diskURL(for: artworkKey)),
                let stored = try? JSONDecoder().decode(CacheEntry.self, from: storedData) {
                 memoryCache[artworkKey] = stored
-                if stored.signature == signature { return stored.palette }
+                if stored.signature == signature, stored.palette.regions != nil { return stored.palette }
             }
         }
 
@@ -230,7 +235,62 @@ actor TVArtworkPaletteLoader {
         if Self.distance(primary, secondary) < 0.09 {
             secondary = Self.darkerVariant(of: primary)
         }
-        return TVArtworkPalette(primary: primary, secondary: secondary)
+        return TVArtworkPalette(
+            primary: primary,
+            secondary: secondary,
+            regions: meshRegions(of: image, fallback: primary)
+        )
+    }
+
+    /// 封面缩成 `ArtworkMeshSampler` 要的 24×24 再分块取色(分块与 iPhone、Mac 共用 PrimuseKit 那一份),
+    /// 每块再按行压进主色到副色的明暗区间:顶行和主色一样亮,末行和副色一样深 ——
+    /// 背景的网格渐变上浅下深,白字压在哪一块上都读得清。
+    private nonisolated static func meshRegions(
+        of image: CGImage,
+        fallback: TVArtworkPalette.RGB
+    ) -> [TVArtworkPalette.RGB]? {
+        let width = ArtworkMeshSampler.sampleWidth
+        let height = ArtworkMeshSampler.sampleHeight
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        let rendered = pixels.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(
+                data: bytes.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+                    | CGBitmapInfo.byteOrder32Big.rawValue
+            ) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard rendered else { return nil }
+
+        let regions = ArtworkMeshSampler.regions(
+            pixels: pixels,
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow
+        )
+        let rows = LibraryDetailMeshTint.rows
+        return regions.enumerated().map { index, region in
+            guard let region else { return fallback }
+            let rgb = LibraryDetailTintPolicy.rgbComponents(of: region)
+            // 0 是顶行(主色的区间),1 是末行(副色的区间)。
+            let progress = Double(index / LibraryDetailMeshTint.columns) / Double(max(1, rows - 1))
+            func blend(_ top: Double, _ bottom: Double) -> Double { top + (bottom - top) * progress }
+            return normalized(
+                .init(red: rgb.red, green: rgb.green, blue: rgb.blue),
+                minimumLuminance: blend(0.055, 0.025),
+                maximumLuminance: blend(0.22, 0.12),
+                minimumBrightness: blend(0.30, 0.16),
+                maximumBrightness: blend(0.68, 0.48)
+            )
+        }
     }
 
     private nonisolated static func secondaryScore(_ bucket: Bucket,

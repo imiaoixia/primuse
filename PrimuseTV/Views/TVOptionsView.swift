@@ -115,7 +115,8 @@ struct TVOptionsView: View {
         let np = store.nowPlaying
         let colors = store.nowPlayingPresentationColors
         ZStack {
-            TVAmbientBackdrop(tint: colors.primary, tint2: colors.secondary, strength: 0.5)
+            TVAmbientBackdrop(tint: colors.primary, tint2: colors.secondary,
+                              mesh: store.nowPlayingPresentationMesh, strength: 0.5)
             TVColor.bg.opacity(0.52).ignoresSafeArea()
 
             HStack(alignment: .top, spacing: 64) {

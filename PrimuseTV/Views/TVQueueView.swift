@@ -43,7 +43,8 @@ struct TVQueueView: View {
         let shown = TVLongListPagingPolicy.clamped(limit: renderedRowCount, totalCount: total)
         let rows = upNextRows(limit: shown)
         ZStack {
-            TVAmbientBackdrop(tint: colors.primary, tint2: colors.secondary, strength: 0.55)
+            TVAmbientBackdrop(tint: colors.primary, tint2: colors.secondary,
+                              mesh: store.nowPlayingPresentationMesh, strength: 0.55)
             TVColor.bg.opacity(0.48).ignoresSafeArea()
 
             // 两栏顶端对齐:左边「正在播放」与右边「接下来」的小标题在同一条线上。

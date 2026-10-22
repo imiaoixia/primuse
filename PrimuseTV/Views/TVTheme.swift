@@ -564,12 +564,16 @@ private struct TVExternalFocusModifier: ViewModifier {
 
 // MARK: - Ambient 背景
 
-/// 封面双色氛围背景。浅色外观使用柔和色场，深色外观保留沉浸式明暗层次。
+/// 封面氛围背景。浅色外观使用柔和色场，深色外观保留沉浸式明暗层次。
+/// 给了封面的分块色(`mesh`)时色场是一张网格渐变 —— 封面左上偏红、右下偏蓝，背景也是；
+/// 没给(电台、取色前、tvOS 17)时退回主色、副色两团光。
 /// 给了 `image`（播放页背景选了模糊封面 / 专辑封底 / 我的图片）时，图铺满在色场上面，
 /// 再盖一层保护文字的渐变；换图时淡入淡出。
 struct TVAmbientBackdrop: View {
     var tint: Color = TVColor.brand
     var tint2: Color = TVColor.brandSecondary
+    /// 封面切成 3×3 块各取的颜色，行优先(见 `TVArtworkPalette.regions`)。
+    var mesh: [Color]? = nil
     var strength: Double = 0.7
     var image: CGImage? = nil
     /// 图的身份，变了才算换图（同一张图重新解码不重播淡入）。
@@ -587,25 +591,21 @@ struct TVAmbientBackdrop: View {
         let primary = coverDrivenAmbient ? tint : TVColor.brand(hex: accentHex)
         let secondary = coverDrivenAmbient ? tint2 : TVColor.brandSecondary(hex: accentHex)
         let s = AppThemePreferences.normalizedAmbientStrength(strength * ambientStrength)
+        // 关掉「随封面变色」时用的是主题色，没有分块色可铺。
+        let meshColors = coverDrivenAmbient ? mesh.flatMap { $0.count == 9 ? $0 : nil } : nil
         ZStack {
             TVColor.bgDeep
-            GeometryReader { geo in
-                let w = geo.size.width
-                let h = geo.size.height
-                ZStack {
-                    Circle()
-                        .fill(primary)
-                        .frame(width: w * 1.1, height: w * 1.1)
-                        .blur(radius: 220)
-                        .opacity((colorScheme == .dark ? 0.82 : 0.42) * s)
-                        .offset(x: -w * 0.18, y: -h * 0.28)
-                    Circle()
-                        .fill(secondary)
-                        .frame(width: w * 0.95, height: w * 0.95)
-                        .blur(radius: 240)
-                        .opacity((colorScheme == .dark ? 0.72 : 0.34) * s)
-                        .offset(x: w * 0.28, y: h * 0.30)
+            if let meshColors {
+                if #available(tvOS 18.0, *) {
+                    TVMeshColorField(
+                        colors: meshColors,
+                        opacity: (colorScheme == .dark ? 0.8 : 0.4) * s
+                    )
+                } else {
+                    glowField(primary: primary, secondary: secondary, strength: s)
                 }
+            } else {
+                glowField(primary: primary, secondary: secondary, strength: s)
             }
             if colorScheme == .dark {
                 LinearGradient(colors: [.black.opacity(0.20), .black.opacity(0.50)],
@@ -627,6 +627,46 @@ struct TVAmbientBackdrop: View {
         .animation(.easeInOut(duration: 0.6), value: imageID)
         .ignoresSafeArea()
         .allowsHitTesting(false)
+    }
+
+    /// 主色、副色两团光(左上、右下)。
+    private func glowField(primary: Color, secondary: Color, strength s: Double) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            ZStack {
+                Circle()
+                    .fill(primary)
+                    .frame(width: w * 1.1, height: w * 1.1)
+                    .blur(radius: 220)
+                    .opacity((colorScheme == .dark ? 0.82 : 0.42) * s)
+                    .offset(x: -w * 0.18, y: -h * 0.28)
+                Circle()
+                    .fill(secondary)
+                    .frame(width: w * 0.95, height: w * 0.95)
+                    .blur(radius: 240)
+                    .opacity((colorScheme == .dark ? 0.72 : 0.34) * s)
+                    .offset(x: w * 0.28, y: h * 0.30)
+            }
+        }
+    }
+}
+
+/// 封面分块色铺成的 3×3 网格渐变。中心点稍稍偏开，过渡不会正好是一个十字。
+@available(tvOS 18.0, *)
+private struct TVMeshColorField: View {
+    let colors: [Color]
+    let opacity: Double
+
+    private static let points: [SIMD2<Float>] = [
+        [0, 0], [0.5, 0], [1, 0],
+        [0, 0.5], [0.56, 0.44], [1, 0.5],
+        [0, 1], [0.5, 1], [1, 1],
+    ]
+
+    var body: some View {
+        MeshGradient(width: 3, height: 3, points: Self.points, colors: colors)
+            .opacity(opacity)
     }
 }
 

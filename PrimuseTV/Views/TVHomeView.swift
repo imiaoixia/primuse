@@ -93,7 +93,8 @@ struct TVHomeView: View {
                 year: 0,
                 tint: palette?.primary ?? TVColor.brand,
                 tint2: palette?.secondary ?? Color(hex: "#1f3a5b"),
-                glyph: title.isEmpty ? "♪" : String(title.prefix(1))
+                glyph: title.isEmpty ? "♪" : String(title.prefix(1)),
+                mesh: store.artworkMesh(forSongID: song.id)
             )
         case .empty:
             return placeholderHero
@@ -146,7 +147,7 @@ struct TVHomeView: View {
     var body: some View {
         ZStack {
             // Top Shelf hero 背景
-            TVAmbientBackdrop(tint: hero.tint, tint2: hero.tint2, strength: 0.7)
+            TVAmbientBackdrop(tint: hero.tint, tint2: hero.tint2, mesh: hero.mesh, strength: 0.7)
             GeometryReader { geo in
                 ZStack {
                     RadialGradient(colors: [heroAmbientTint.opacity(0.4), .clear],

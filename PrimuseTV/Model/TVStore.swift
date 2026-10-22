@@ -197,6 +197,8 @@ struct TVAlbum: Identifiable, Hashable {
     var tint: Color
     var tint2: Color
     let glyph: String
+    /// 封面分块取到的 3×3 颜色(背景的网格渐变用);还没取到真实封面色时为 nil。
+    var mesh: [Color]? = nil
 }
 
 struct TVSong: Identifiable, Hashable {
@@ -275,7 +277,8 @@ struct TVAlbumMapper: TVLibraryMapper {
                        year: a.year ?? 0,
                        tint: palette.map { TVLibraryTint.color($0.primary) } ?? fallback.0,
                        tint2: palette.map { TVLibraryTint.color($0.secondary) } ?? fallback.1,
-                       glyph: TVLibraryTint.glyph(a.title))
+                       glyph: TVLibraryTint.glyph(a.title),
+                       mesh: palette.flatMap(TVLibraryTint.meshColors))
     }
 }
 
@@ -315,6 +318,12 @@ enum TVLibraryTint {
 
     static func color(_ rgb: TVArtworkPalette.RGB) -> Color {
         Color(.sRGB, red: rgb.red, green: rgb.green, blue: rgb.blue, opacity: 1)
+    }
+
+    /// 调色板里的分块色,个数不对(旧版缓存、取色失败)时为 nil,背景退回主色、副色两团光。
+    static func meshColors(_ palette: TVArtworkPalette) -> [Color]? {
+        guard let regions = palette.regions, regions.count == LibraryDetailMeshTint.stopCount else { return nil }
+        return regions.map(color)
     }
 }
 
@@ -1052,6 +1061,16 @@ final class TVStore {
             ? (TVColor.brand, TVColor.brandSecondary)
             : (nowPlaying.tint, nowPlaying.tint2)
     }
+    /// 正在播放这首的封面分块色,和 `nowPlayingPresentationColors` 一样先看专辑封面、再看这首自己的。
+    /// 电台、还没取到封面色时为 nil(背景退回两团光)。
+    var nowPlayingPresentationMesh: [Color]? {
+        guard hasNowPlaying, !isLiveRadio else { return nil }
+        _ = albumArtworkPaletteRevision
+        _ = songArtworkPaletteRevision
+        let palette = artworkPalettes[nowPlaying.albumID]
+            ?? artworkPalettes[Self.songArtworkPaletteKey(nowPlaying.songID)]
+        return palette.flatMap(TVLibraryTint.meshColors)
+    }
     var canPlayMusicVideo: Bool {
         guard !isMedleyActive, !isLiveRadio else { return false }
         guard let id = currentSongID,
@@ -1610,6 +1629,12 @@ final class TVStore {
             return nil
         }
         return (palette.primary.color, palette.secondary.color)
+    }
+
+    /// 这首歌封面的分块色(背景的网格渐变用),跟 `artworkColors(forSongID:)` 同一份调色板。
+    func artworkMesh(forSongID songID: String) -> [Color]? {
+        _ = songArtworkPaletteRevision
+        return artworkPalettes[Self.songArtworkPaletteKey(songID)].flatMap(TVLibraryTint.meshColors)
     }
 
     /// Artwork resolves independently for every visible card. Coalesce those

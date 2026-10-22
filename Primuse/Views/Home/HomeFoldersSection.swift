@@ -494,10 +494,6 @@ struct HomeFolderBrowser: View {
         let order: HomeFolderSongOrder
     }
 
-    /// A `List` registers every row up front; past this many the page shows
-    /// the first ones and links to a lazily built page with all of them.
-    private static let inlineSongLimit = 300
-
     private func refreshDirectSongIDs() async {
         guard let nodeID = currentNodeID, let index = model.index else {
             directSongs = (currentNodeID, [])
@@ -578,7 +574,23 @@ struct HomeFolderBrowser: View {
         #endif
     }
 
-    private var folderList: some View {
+    /// 目录总览(来源、收藏的目录、歌曲排序)条目少、要能拖动排序，用系统列表；进到某个目录之后
+    /// 子文件夹和歌曲可能有几万行，手机上换成按可见区分窗的列表(`IOSFolderWindowedList`)，
+    /// 不再只列前三百首、其余要再点一层「查看全部」。
+    @ViewBuilder
+    private var folderListContent: some View {
+        #if os(iOS)
+        if nodeID != nil {
+            windowedFolderContents
+        } else {
+            overviewList
+        }
+        #else
+        overviewList
+        #endif
+    }
+
+    private var overviewList: some View {
         List {
             if nodeID == nil, !pins.isEmpty {
                 Section {
@@ -662,96 +674,62 @@ struct HomeFolderBrowser: View {
                     Text(HomeDiscoveryText.string("folder_song_order_footer"))
                 }
             }
+        }
+    }
 
-            if let nodeID {
-                let ids = directSongIDs
-                if !ids.isEmpty {
-                    Section("tab_songs") {
-                        ForEach(ids.prefix(Self.inlineSongLimit), id: \.self) { songID in
-                            if let song = library.unobservedVisibleSong(id: songID) {
-                                // A fixed row container prevents List from expanding
-                                // SongRowView's conditional menu tree for every song.
-                                HStack(spacing: 0) {
-                                    SongRowView(song: song, isPlaying: player.currentSong?.id == song.id)
-                                }
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        HomeDiscoveryPlayback.play(ids: ids, startingAt: songID, library: library, player: player)
-                                    }
-                            }
-                        }
-                        if ids.count > Self.inlineSongLimit {
-                            NavigationLink {
-                                SearchCollectionDetailView(result: SearchCollectionResult(
-                                    target: .folder(nodeID),
-                                    title: node.map(HomeDiscoveryText.folderTitle) ?? "",
-                                    detail: "",
-                                    folderSongIDs: ids
-                                ))
+    private var folderList: some View {
+        folderListContent
+            // iPhone Duo 竖栏：文件夹与歌曲行铺到屏幕右缘，系统的玻璃胶囊浮在上面。
+            .pmExtendsUnderVerticalBar()
+            .safeAreaInset(edge: .bottom, spacing: legacyBottomClearance == 0 ? 0 : nil) {
+                Color.clear.frame(height: legacyBottomClearance)
+            }
+            .overlay {
+                if model.index == nil {
+                    ProgressView()
+                } else if children.isEmpty && (node?.descendantSongCount ?? 0) == 0 {
+                    ContentUnavailableView(
+                        HomeDiscoveryText.string(nodeID == nil ? "no_folders" : "folder_unavailable"),
+                        systemImage: "folder",
+                        description: Text(HomeDiscoveryText.string("folders_hint"))
+                    )
+                }
+            }
+            .navigationTitle(node.map(HomeDiscoveryText.folderTitle) ?? HomeDiscoveryText.string("folders"))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            .minimalNavigationDetail(isDetail: nodeID != nil)
+            .librarySearchContext {
+                guard let node, let index = model.index else { return nil }
+                return LibrarySearchScope.folder(node: node, index: index, title: HomeDiscoveryText.folderTitle)
+            }
+            .toolbar {
+                if let node {
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        pinButton(node.id, titled: verticalBarEdge != nil)
+                        if verticalBarEdge == nil {
+                            Menu {
+                                folderMoreItems(node)
                             } label: {
-                                HStack {
-                                    Text("see_all")
-                                    Spacer()
-                                    Text(verbatim: "\(ids.count.formatted()) \(String(localized: "songs_count"))")
-                                        .foregroundStyle(.secondary)
-                                }
+                                PMToolbarItemLabel("a11y_more_actions", systemImage: "ellipsis", titled: verticalBarEdge != nil)
+                            }
+                            .accessibilityLabel("a11y_more_actions")
+                        }
+                    }
+                    // 系统竖栏(iPhone Duo):「⋯」里的动作并进系统溢出菜单。
+                    if verticalBarEdge != nil {
+                        if #available(iOS 27.0, *) {
+                            ToolbarOverflowMenu {
+                                folderMoreItems(node)
                             }
                         }
                     }
                 }
-            }
-        }
-        // iPhone Duo 竖栏：文件夹与歌曲行铺到屏幕右缘，系统的玻璃胶囊浮在上面。
-        .pmExtendsUnderVerticalBar()
-        .safeAreaInset(edge: .bottom, spacing: legacyBottomClearance == 0 ? 0 : nil) {
-            Color.clear.frame(height: legacyBottomClearance)
-        }
-        .overlay {
-            if model.index == nil {
-                ProgressView()
-            } else if children.isEmpty && (node?.descendantSongCount ?? 0) == 0 {
-                ContentUnavailableView(
-                    HomeDiscoveryText.string(nodeID == nil ? "no_folders" : "folder_unavailable"),
-                    systemImage: "folder",
-                    description: Text(HomeDiscoveryText.string("folders_hint"))
-                )
-            }
-        }
-        .navigationTitle(node.map(HomeDiscoveryText.folderTitle) ?? HomeDiscoveryText.string("folders"))
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        .minimalNavigationDetail(isDetail: nodeID != nil)
-        .librarySearchContext {
-            guard let node, let index = model.index else { return nil }
-            return LibrarySearchScope.folder(node: node, index: index, title: HomeDiscoveryText.folderTitle)
-        }
-        .toolbar {
-            if let node {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    pinButton(node.id, titled: verticalBarEdge != nil)
-                    if verticalBarEdge == nil {
-                        Menu {
-                            folderMoreItems(node)
-                        } label: {
-                            PMToolbarItemLabel("a11y_more_actions", systemImage: "ellipsis", titled: verticalBarEdge != nil)
-                        }
-                        .accessibilityLabel("a11y_more_actions")
-                    }
-                }
-                // 系统竖栏(iPhone Duo):「⋯」里的动作并进系统溢出菜单。
-                if verticalBarEdge != nil {
-                    if #available(iOS 27.0, *) {
-                        ToolbarOverflowMenu {
-                            folderMoreItems(node)
-                        }
-                    }
+                if node == nil, !usesInlineControls {
+                    ToolbarItem(placement: .primaryAction) { EditButton() }
                 }
             }
-            if node == nil, !usesInlineControls {
-                ToolbarItem(placement: .primaryAction) { EditButton() }
-            }
-        }
-        #endif
+            #endif
     }
 
     /// 目录页「⋯」里的动作：顶上一行播放、随机播放，下面是用作歌单（有的来源才有）和歌曲排序。
@@ -777,6 +755,53 @@ struct HomeFolderBrowser: View {
         }
         HomeFolderSongOrderSubmenu(order: songOrderBinding)
     }
+
+    #if os(iOS)
+    /// 进到某个目录之后的内容：子文件夹一段、这一层自己的歌一段，都只摆出看得见的那几十行。
+    private var windowedFolderContents: some View {
+        let folders = children
+        let songIDs = directSongIDs
+        return IOSFolderWindowedList(
+            folderCount: folders.count,
+            songCount: songIDs.count,
+            folderTitle: HomeDiscoveryText.string("folders"),
+            songTitle: String(localized: "tab_songs")
+        ) { index in
+            windowedChildRow(folders[index])
+        } songRow: { index in
+            let songID = songIDs[index]
+            if let song = library.unobservedVisibleSong(id: songID) {
+                SongRowView(song: song, isPlaying: player.currentSong?.id == song.id)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        HomeDiscoveryPlayback.play(ids: songIDs, startingAt: songID, library: library, player: player)
+                    }
+            }
+        }
+    }
+
+    /// 分窗列表里的子文件夹行：不在系统列表里，没有自带的右箭头和点按高亮，这里自己画。
+    private func windowedChildRow(_ child: LibraryFolderNode) -> some View {
+        HStack(spacing: 4) {
+            NavigationLink {
+                HomeFolderBrowser(nodeID: child.id)
+                    .environment(model)
+            } label: {
+                HStack(spacing: 8) {
+                    HomeFolderChildLabel(node: child)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.pmPressable)
+            pinButton(child.id)
+        }
+    }
+    #endif
 
     #if os(macOS)
     private var macOverview: some View {
@@ -1777,6 +1802,155 @@ private struct MacHomeFolderSongMenu: View {
         case .notCached:
             Button("offline_cache_song", systemImage: "arrow.down.circle") { sourceManager.downloadForOffline(song: song) }
         }
+    }
+}
+#endif
+
+#if os(iOS)
+/// 进到某个目录之后的列表：子文件夹一段、歌曲一段，各有一行段头，按可见区手工分窗 ——
+/// 只摆出看得见的那几十行，上下用同样高的空白撑出整页的高度。文件夹里有几万首歌，
+/// 进页面时也不必像 `List` 那样把每一行都登记一遍，滚动时只换窗口里那几行。
+///
+/// 每一行等高(随动态字体缩放)，位置靠算不靠量；样子照系统的分组列表：段头一行小字，
+/// 行铺在圆角的卡片底上，首尾两行带圆角。
+private struct IOSFolderWindowedList<FolderRow: View, SongRow: View>: View {
+    let folderCount: Int
+    let songCount: Int
+    let folderTitle: String
+    let songTitle: String
+    @ViewBuilder let folderRow: (Int) -> FolderRow
+    @ViewBuilder let songRow: (Int) -> SongRow
+
+    @ScaledMetric(relativeTo: .body) private var folderRowHeight: CGFloat = 68
+    @ScaledMetric(relativeTo: .subheadline) private var songRowHeight: CGFloat = 62
+    @ScaledMetric(relativeTo: .footnote) private var headerHeight: CGFloat = 44
+    @ScaledMetric(relativeTo: .body) private var folderDividerInset: CGFloat = 72
+    @ScaledMetric(relativeTo: .subheadline) private var songDividerInset: CGFloat = 70
+
+    @State private var visibleTop: Double = 0
+    @State private var viewportHeight: Double = 0
+
+    private let cornerRadius: CGFloat = 10
+    private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+
+    private struct ScrollMetrics: Equatable {
+        let top: Double
+        let height: Double
+    }
+
+    var body: some View {
+        let folderRowsTop = folderCount > 0 ? Double(headerHeight) : 0
+        let songHeaderTop = folderRowsTop + Double(folderCount) * Double(folderRowHeight)
+        let songRowsTop = songHeaderTop + (songCount > 0 ? Double(headerHeight) : 0)
+        let folderRange = SongListSegmentWindow.range(
+            count: folderCount,
+            segmentTop: folderRowsTop,
+            rowHeight: Double(folderRowHeight),
+            visibleTop: visibleTop,
+            viewportHeight: viewportHeight
+        )
+        let songRange = SongListSegmentWindow.range(
+            count: songCount,
+            segmentTop: songRowsTop,
+            rowHeight: Double(songRowHeight),
+            visibleTop: visibleTop,
+            viewportHeight: viewportHeight
+        )
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if folderCount > 0 {
+                    sectionHeader(folderTitle)
+                    segment(
+                        count: folderCount,
+                        range: folderRange,
+                        rowHeight: folderRowHeight,
+                        dividerInset: folderDividerInset,
+                        row: folderRow
+                    )
+                }
+                if songCount > 0 {
+                    sectionHeader(songTitle)
+                    segment(
+                        count: songCount,
+                        range: songRange,
+                        rowHeight: songRowHeight,
+                        dividerInset: songDividerInset,
+                        row: songRow
+                    )
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 24)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .onScrollGeometryChange(for: ScrollMetrics.self) { geometry in
+            ScrollMetrics(
+                top: SongListSegmentWindow.quantizedTop(Double(geometry.visibleRect.minY)),
+                height: Double(geometry.containerSize.height.rounded())
+            )
+        } action: { _, metrics in
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                visibleTop = metrics.top
+                viewportHeight = metrics.height
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(verbatim: title)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 7)
+            .frame(maxWidth: .infinity, minHeight: headerHeight, maxHeight: headerHeight, alignment: .bottomLeading)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// 一段等高的行：窗口之外是同样颜色的空白(滚得太快、窗口还没跟上时看到的也是卡片底，不是一道缝)。
+    @ViewBuilder
+    private func segment<Row: View>(
+        count: Int,
+        range: Range<Int>,
+        rowHeight: CGFloat,
+        dividerInset: CGFloat,
+        row: @escaping (Int) -> Row
+    ) -> some View {
+        cardColor
+            .frame(height: CGFloat(range.lowerBound) * rowHeight)
+            .accessibilityHidden(true)
+
+        ForEach(range, id: \.self) { index in
+            row(index)
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: rowHeight)
+                .background(cardColor, in: rowShape(index: index, count: count))
+                .overlay(alignment: .bottom) {
+                    if index < count - 1 {
+                        Divider().padding(.leading, dividerInset)
+                    }
+                }
+        }
+
+        cardColor
+            .frame(height: CGFloat(count - range.upperBound) * rowHeight)
+            .accessibilityHidden(true)
+    }
+
+    private func rowShape(index: Int, count: Int) -> UnevenRoundedRectangle {
+        let top: CGFloat = index == 0 ? cornerRadius : 0
+        let bottom: CGFloat = index == count - 1 ? cornerRadius : 0
+        return UnevenRoundedRectangle(
+            topLeadingRadius: top,
+            bottomLeadingRadius: bottom,
+            bottomTrailingRadius: bottom,
+            topTrailingRadius: top,
+            style: .continuous
+        )
     }
 }
 #endif

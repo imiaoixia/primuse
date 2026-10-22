@@ -809,3 +809,67 @@ struct SongListSnapshotTests {
         ).rows.map(\.id)
     }
 }
+
+@Suite("Folder page segment windows")
+struct SongListSegmentWindowTests {
+    @Test("A run's window covers every row of the real viewport within a scroll step")
+    func segmentWindowCoversViewport() {
+        let count = 120_000
+        let segmentTop = 46.0 + 40 * 68.0 + 46
+        for rowHeight in [56.0, 64.0, 82.0] {
+            for viewport in [568.0, 844.0, 1_366.0] {
+                for offset in stride(from: 0.0, to: segmentTop + Double(count) * rowHeight, by: 977) {
+                    let range = SongListSegmentWindow.range(
+                        count: count,
+                        segmentTop: segmentTop,
+                        rowHeight: rowHeight,
+                        visibleTop: SongListSegmentWindow.quantizedTop(offset),
+                        viewportHeight: viewport
+                    )
+                    #expect(range.lowerBound >= 0 && range.upperBound <= count)
+                    let firstVisible = Int(((offset - segmentTop) / rowHeight).rounded(.down))
+                    let lastVisible = Int(((offset + viewport - segmentTop) / rowHeight).rounded(.down))
+                    for row in [firstVisible, lastVisible] where (0..<count).contains(row) {
+                        #expect(range.contains(row), "row \(row) missing at offset \(offset)")
+                    }
+                    let realizedLimit = Int(((viewport + SongListSegmentWindow.scrollQuantum) / rowHeight).rounded(.up))
+                        + SongListSegmentWindow.overscanRows * 2 + 2
+                    #expect(range.count <= realizedLimit)
+                }
+            }
+        }
+    }
+
+    @Test("A run entirely off screen realizes nothing but keeps its height")
+    func offscreenSegmentIsEmptyButAnchored() {
+        let below = SongListSegmentWindow.range(
+            count: 500, segmentTop: 50_000, rowHeight: 64, visibleTop: 0, viewportHeight: 844
+        )
+        #expect(below.isEmpty)
+        #expect(below.lowerBound == 0)
+
+        let above = SongListSegmentWindow.range(
+            count: 500, segmentTop: 0, rowHeight: 64, visibleTop: 200_000, viewportHeight: 844
+        )
+        #expect(above.isEmpty)
+        #expect(above.lowerBound == 500)
+    }
+
+    @Test("Offsets inside one step give the same window; bad input clamps")
+    func quantizedOffsetsAreStable() {
+        let step = SongListSegmentWindow.scrollQuantum
+        #expect(SongListSegmentWindow.quantizedTop(-40) == 0)
+        #expect(SongListSegmentWindow.quantizedTop(.nan) == 0)
+        #expect(SongListSegmentWindow.quantizedTop(step * 3 + 1) == step * 3)
+        #expect(SongListSegmentWindow.quantizedTop(step * 4 - 1) == step * 3)
+        #expect(SongListSegmentWindow.range(
+            count: 0, segmentTop: 0, rowHeight: 64, visibleTop: 0, viewportHeight: 844
+        ).isEmpty)
+        #expect(SongListSegmentWindow.range(
+            count: 20, segmentTop: 0, rowHeight: 64, visibleTop: 0, viewportHeight: .infinity
+        ) == 0..<20)
+        #expect(SongListSegmentWindow.range(
+            count: 20, segmentTop: 0, rowHeight: 0, visibleTop: 0, viewportHeight: 844
+        ) == 0..<20)
+    }
+}

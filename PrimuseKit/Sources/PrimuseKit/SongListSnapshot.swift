@@ -250,6 +250,55 @@ public enum SongListScrollWindow {
     }
 }
 
+/// One run of equal-height rows inside a manually windowed page — the folder
+/// page stacks a run of subfolders and a run of songs, each under its own
+/// header. Only the rows near the viewport are realized; the rest of the run
+/// is a spacer of the same height, so a folder of a few hundred thousand
+/// songs costs the same to scroll as one of fifty.
+public enum SongListSegmentWindow {
+    /// Rows realized past either edge of the viewport.
+    public static let overscanRows = 8
+    /// Scroll offsets are rounded down to this many points, so the window
+    /// (and the page body) only changes once per step instead of every frame.
+    public static let scrollQuantum = 256.0
+
+    public static func quantizedTop(_ offset: Double) -> Double {
+        guard offset.isFinite, offset > 0 else { return 0 }
+        return (offset / scrollQuantum).rounded(.down) * scrollQuantum
+    }
+
+    /// - Parameters:
+    ///   - segmentTop: Where the run's first row starts in the scroll content.
+    ///   - visibleTop: The quantized top of the viewport. The real top may be up
+    ///     to `scrollQuantum` further down, so the window reaches that much lower.
+    /// - Returns: The rows to realize. When the whole run is off screen the range
+    ///   is empty but still anchored, so the spacers above and below it add up
+    ///   to the run's full height.
+    public static func range(
+        count: Int,
+        segmentTop: Double,
+        rowHeight: Double,
+        visibleTop: Double,
+        viewportHeight: Double
+    ) -> Range<Int> {
+        guard count > 0 else { return 0..<0 }
+        let rowHeight = rowHeight.isFinite && rowHeight > 0 ? rowHeight : 1
+        let height = viewportHeight.isFinite && viewportHeight > 0 ? viewportHeight : 900
+        let top = visibleTop.isFinite ? visibleTop : 0
+        let segmentTop = segmentTop.isFinite ? segmentTop : 0
+        let firstRow = ((top - segmentTop) / rowHeight).rounded(.down)
+        let lastRow = ((top + height + scrollQuantum - segmentTop) / rowHeight).rounded(.up)
+        let lowerBound = clampedRow(firstRow - Double(overscanRows), count: count)
+        let upperBound = clampedRow(lastRow + Double(overscanRows), count: count)
+        return lowerBound..<max(lowerBound, upperBound)
+    }
+
+    private static func clampedRow(_ row: Double, count: Int) -> Int {
+        guard row.isFinite else { return row > 0 ? count : 0 }
+        return Int(min(max(row, 0), Double(count)))
+    }
+}
+
 /// Row tops for a manually windowed list whose rows are not all one height
 /// (a playlist table mixes song rows with taller greyed-out placeholders).
 /// Find the first visible row here, then size the window with the shortest

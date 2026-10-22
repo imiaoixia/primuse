@@ -1851,6 +1851,8 @@ struct TVSongRow: View {
     /// 父视图的焦点绑定(见 `TVFocusButton`):字母栏跳转、回到歌曲页时把焦点放到这一行。
     var focusBinding: FocusState<String?>.Binding? = nil
     var focusID: String? = nil
+    /// 按焦点分窗的列表(`TVWindowedList`)要每行一样高:给了就把行定成这个高度,歌名只排一行。
+    var fixedHeight: CGFloat? = nil
 
     var body: some View {
         let album = store.albumOf(song)
@@ -1889,7 +1891,7 @@ struct TVSongRow: View {
                             .lineLimit(1)
                     }
                     Text(song.title).tvFont(.cardTitle)
-                        .foregroundStyle(isCurrent ? TVColor.brand : TVColor.text).lineLimit(2)
+                        .foregroundStyle(isCurrent ? TVColor.brand : TVColor.text).lineLimit(fixedHeight == nil ? 2 : 1)
                     Text(song.artist).tvFont(.caption)
                         .foregroundStyle(TVColor.textFaint).lineLimit(1)
                 }
@@ -1903,8 +1905,9 @@ struct TVSongRow: View {
                 Text(TVFmt.time(song.duration)).tvFont(.caption, design: .monospaced)
                     .foregroundStyle(TVColor.textFaint)
             }
-            .padding(.horizontal, 22).padding(.vertical, 16)
+            .padding(.horizontal, 22).padding(.vertical, fixedHeight == nil ? 16 : 0)
             .frame(maxWidth: .infinity)
+            .frame(height: fixedHeight)
             .background(focused ? TVColor.surfaceStrong : TVColor.card)
         }
         .contextMenu { TVSongLikeMenuItem(store: store, songID: song.id) }

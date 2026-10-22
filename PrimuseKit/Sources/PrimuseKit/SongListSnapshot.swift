@@ -297,6 +297,25 @@ public enum SongListSegmentWindow {
         guard row.isFinite else { return row > 0 ? count : 0 }
         return Int(min(max(row, 0), Double(count)))
     }
+
+    /// The focused row is rounded down to this many rows, so moving focus by a
+    /// row or two keeps the same window.
+    public static let focusStride = 8
+
+    /// Focus-driven window for a remote-controlled list (Apple TV): the rows
+    /// within `reach` of the focused row, so the next row is always there for
+    /// the focus engine to move onto, however long the run is.
+    public static func range(count: Int, focusedRow: Int, reach: Int) -> Range<Int> {
+        guard count > 0 else { return 0..<0 }
+        let reach = max(reach, focusStride)
+        let anchor = min(max(0, focusedRow), count - 1) / focusStride * focusStride
+        return max(0, anchor - reach)..<min(count, anchor + focusStride + reach)
+    }
+
+    /// The row a focus change anchors the window to; unchanged within a stride.
+    public static func focusAnchor(_ focusedRow: Int) -> Int {
+        max(0, focusedRow) / focusStride * focusStride
+    }
 }
 
 /// Row tops for a manually windowed list whose rows are not all one height

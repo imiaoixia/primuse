@@ -1086,6 +1086,47 @@ extension TVPagedList where Item: Identifiable, ID == Item.ID {
     }
 }
 
+/// 按焦点分窗的长列表(资料库 › 目录):每行等高,只摆出焦点前后几十行,上下用同样高的空白撑住整页 ——
+/// 文件夹里几万首歌,交给焦点引擎的也只有这几十个候选;不像 `TVPagedList` 那样越往下翻渲染得越多、
+/// 翻到深处方向键照样变迟钝。焦点前后各摆的行数远大于一屏,连按方向键也走不到空白里。
+///
+/// `row` 拿到的第二个参数必须接到行自身的焦点回调上,窗口靠它跟着焦点走。
+struct TVWindowedList<Row: View>: View {
+    let count: Int
+    /// 每行的高度(不含行距)。行要自己撑满这个高度,见 `TVSongRow.fixedHeight`。
+    let rowHeight: CGFloat
+    var spacing: CGFloat = 22
+    var reach = 40
+    @ViewBuilder let row: (Int, @escaping (Bool) -> Void) -> Row
+
+    /// 焦点所在的行按 `SongListSegmentWindow.focusStride` 取整;同一步里挪动焦点不重算窗口。
+    @State private var anchorRow = 0
+
+    var body: some View {
+        let range = SongListSegmentWindow.range(count: count, focusedRow: anchorRow, reach: reach)
+        let stride = rowHeight + spacing
+        let rowsBelow = count - range.upperBound
+        VStack(alignment: .leading, spacing: 0) {
+            Color.clear
+                .frame(height: CGFloat(range.lowerBound) * stride)
+                .accessibilityHidden(true)
+            ForEach(range, id: \.self) { index in
+                row(index) { focused in
+                    guard focused else { return }
+                    let anchor = SongListSegmentWindow.focusAnchor(index)
+                    if anchor != anchorRow { anchorRow = anchor }
+                }
+                .frame(height: rowHeight)
+                .padding(.bottom, index < count - 1 ? spacing : 0)
+            }
+            // 末行没有行距,窗口外还有行时空白里扣掉它。
+            Color.clear
+                .frame(height: rowsBelow > 0 ? CGFloat(rowsBelow) * stride - spacing : 0)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 /// `TVPagedList` 的网格版:先渲染一页格子,焦点挪到末尾附近再续。上千个电台、
 /// 流派的网格交给焦点引擎时,方向键同样会变迟钝。渲染到的格数凑满整行,
 /// 最后一行不会只露出半行让焦点往下落空。

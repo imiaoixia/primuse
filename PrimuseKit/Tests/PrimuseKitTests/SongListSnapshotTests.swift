@@ -872,4 +872,29 @@ struct SongListSegmentWindowTests {
             count: 20, segmentTop: 0, rowHeight: 0, visibleTop: 0, viewportHeight: 844
         ) == 0..<20)
     }
+
+    @Test("A focus window always holds the rows around the focused one")
+    func focusWindowHoldsNeighbours() {
+        let reach = 40
+        for count in [1, 7, 60, 5_000, 120_000] {
+            for focused in Array(0..<min(count, 50)) + [count / 2, count - 1] {
+                let range = SongListSegmentWindow.range(count: count, focusedRow: focused, reach: reach)
+                #expect(range.lowerBound >= 0 && range.upperBound <= count)
+                #expect(range.contains(focused))
+                #expect(range.contains(max(0, focused - reach)))
+                #expect(range.contains(min(count - 1, focused + reach)))
+                #expect(range.count <= reach * 2 + SongListSegmentWindow.focusStride)
+                // 同一个取整步里的焦点给出同一个窗口,页面不必每走一行就重算。
+                let anchored = SongListSegmentWindow.range(
+                    count: count,
+                    focusedRow: SongListSegmentWindow.focusAnchor(focused),
+                    reach: reach
+                )
+                #expect(anchored == range)
+            }
+        }
+        #expect(SongListSegmentWindow.range(count: 0, focusedRow: 3, reach: reach).isEmpty)
+        #expect(SongListSegmentWindow.range(count: 10, focusedRow: -5, reach: reach) == 0..<10)
+        #expect(SongListSegmentWindow.range(count: 10, focusedRow: 99, reach: reach) == 0..<10)
+    }
 }

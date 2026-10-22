@@ -826,6 +826,8 @@ private struct TVThemeColorPicker: View {
             TVAmbientBackdrop(
                 tint: previewColors.primary,
                 tint2: previewColors.secondary,
+                // 选了固定主题色时预览的是那一种颜色,不铺封面的分块色。
+                mesh: mode == .automatic ? store.nowPlayingPresentationMesh : nil,
                 strength: 0.65
             )
             TVColor.bg.opacity(0.48).ignoresSafeArea()

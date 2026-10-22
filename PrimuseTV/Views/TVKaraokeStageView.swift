@@ -14,6 +14,7 @@ struct TVKaraokeStageView: View {
             TVAmbientBackdrop(
                 tint: store.nowPlayingPresentationColors.primary,
                 tint2: store.nowPlayingPresentationColors.secondary,
+                mesh: store.nowPlayingPresentationMesh,
                 strength: 0.6
             )
             TVColor.bg.opacity(0.6).ignoresSafeArea()

@@ -401,7 +401,8 @@ private struct TVSpokenWordChoicePanel<Content: View>: View {
     var body: some View {
         let colors = store.nowPlayingPresentationColors
         ZStack {
-            TVAmbientBackdrop(tint: colors.primary, tint2: colors.secondary, strength: 0.5)
+            TVAmbientBackdrop(tint: colors.primary, tint2: colors.secondary,
+                              mesh: store.nowPlayingPresentationMesh, strength: 0.5)
             TVColor.bg.opacity(0.52).ignoresSafeArea()
             VStack(alignment: .leading, spacing: 22) {
                 Text(title).tvFont(.sectionTitle).foregroundStyle(TVColor.text)

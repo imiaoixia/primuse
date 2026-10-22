@@ -270,9 +270,9 @@ private struct ListeningRankPodiumStep: View {
     @Environment(CoverTintProvider.self) private var tintProvider: CoverTintProvider?
 
     var body: some View {
-        let tint = tintSong.flatMap { tintProvider?.tint(forSongID: $0.id) }
+        let mesh = tintSong.flatMap { tintProvider?.cardMesh(forSongID: $0.id) }
         UnevenRoundedRectangle(topLeadingRadius: 11, topTrailingRadius: 11, style: .continuous)
-            .fill(fill(tint))
+            .fill(fill(mesh))
             .frame(height: height)
             .overlay {
                 Text(verbatim: "\(place + 1)")
@@ -281,7 +281,7 @@ private struct ListeningRankPodiumStep: View {
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
             }
-            .pmAnimation(.ambient, value: tint != nil)
+            .pmAnimation(.ambient, value: mesh != nil)
             .accessibilityHidden(true)
             .task(id: tintSong?.id) {
                 if let tintSong { tintProvider?.prepare([tintSong]) }
@@ -292,14 +292,22 @@ private struct ListeningRankPodiumStep: View {
         min(30, max(15, height * 0.52))
     }
 
-    private func fill(_ tint: Color?) -> LinearGradient {
-        let base: Color = tint ?? (place == 0 ? Color.accentColor : Color.secondary)
+    /// 取到封面色时是封面分块色铺成的网格，上浓下淡；还没取到时用主题色(季军、亚军用灰)的渐变。
+    private func fill(_ mesh: CoverTintCardMesh?) -> AnyShapeStyle {
         let strength: Double = place == 0 ? 1 : 0.72
-        return LinearGradient(
+        if let mesh {
+            return AnyShapeStyle(mesh.gradient(
+                strongest: 0.46 * strength,
+                weakest: 0.12 * strength,
+                falloff: .vertical
+            ))
+        }
+        let base: Color = place == 0 ? Color.accentColor : Color.secondary
+        return AnyShapeStyle(LinearGradient(
             colors: [base.opacity(0.46 * strength), base.opacity(0.12 * strength)],
             startPoint: .top,
             endPoint: .bottom
-        )
+        ))
     }
 }
 

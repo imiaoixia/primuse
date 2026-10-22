@@ -12,6 +12,8 @@ struct TVBrowseDestination: Identifiable {
     let id: String
     let title: String
     let songIDs: [String]
+    /// 风格页有评分(和 iPhone 风格页一样);排行榜那些合集没有。
+    var reviewSubject: LibraryReviewSubject? = nil
 }
 
 struct TVSongCollectionView: View {
@@ -21,8 +23,16 @@ struct TVSongCollectionView: View {
     var openPlayer: () -> Void = {}
 
     var body: some View {
+        // 底色跟着第一首歌所在专辑的封面走(风格页在 iPhone 上也是取代表曲的封面色)。
+        let representative = destination.songIDs.first.flatMap { store.song($0) }.flatMap { store.albumOf($0) }
         ZStack {
-            TVColor.bg.ignoresSafeArea()
+            if let representative {
+                TVAmbientBackdrop(tint: representative.tint, tint2: representative.tint2,
+                                  mesh: representative.mesh, strength: 0.45)
+                TVColor.bg.opacity(0.4).ignoresSafeArea()
+            } else {
+                TVColor.bg.ignoresSafeArea()
+            }
             HStack(alignment: .top, spacing: 50) {
                 VStack(alignment: .leading, spacing: 24) {
                     Text(destination.title).tvFont(.pageTitle)
@@ -41,8 +51,13 @@ struct TVSongCollectionView: View {
                 .frame(width: 410, alignment: .leading)
                 .focusSection()
                 ScrollView {
-                    TVPagedSongIDList(songIDs: destination.songIDs, spacing: 14, action: finishPlayback)
-                        .padding(18)
+                    VStack(alignment: .leading, spacing: 24) {
+                        if let subject = destination.reviewSubject {
+                            TVLibraryReviewControl(subject: subject, style: .card)
+                        }
+                        TVPagedSongIDList(songIDs: destination.songIDs, spacing: 14, action: finishPlayback)
+                    }
+                    .padding(18)
                 }
                 .focusSection()
             }
@@ -79,7 +94,9 @@ struct TVGenreBrowser: View {
             ) { _, genre, focusChanged in
                 let ids = store.library.songs(forGenre: genre.id).map(\.id)
                 TVFocusButton(radius: 18, scale: 1.03, lift: 0, action: {
-                    destination = TVBrowseDestination(id: genre.id, title: genre.name, songIDs: ids)
+                    destination = TVBrowseDestination(
+                        id: genre.id, title: genre.name, songIDs: ids, reviewSubject: .genre(genre.id)
+                    )
                 }, onFocusChanged: focusChanged) { focused in
                     VStack(alignment: .leading, spacing: 18) {
                         HStack(spacing: 6) {
@@ -119,6 +136,9 @@ struct TVFolderBrowser: View {
     @Environment(TVStore.self) private var store
     @State private var index: LibraryFolderIndex?
     @State private var path: [LibraryFolderNodeID] = []
+    /// 子文件夹行与歌曲行的高度:两段都按焦点分窗(`TVWindowedList`),每行要一样高。
+    @ScaledMetric(relativeTo: .headline) private var folderRowHeight: CGFloat = 118
+    @ScaledMetric(relativeTo: .headline) private var songRowHeight: CGFloat = 100
     /// 最近一次「重新扫描此文件夹」:哪个文件夹、扫到哪一步了。
     @State private var rescan: TVFolderRescanState?
     var openPlayer: () -> Void = {}
@@ -158,7 +178,9 @@ struct TVFolderBrowser: View {
                     }
                 }
                 let nodes = current.map { index.children(of: $0.id) } ?? index.sourceNodes
-                TVPagedList(nodes, alignment: .leading, spacing: 22) { _, node, onFocusChanged in
+                // 子文件夹和这一层的歌都按焦点分窗:几万行也只摆出焦点前后几十行,一直翻到底都不卡。
+                TVWindowedList(count: nodes.count, rowHeight: folderRowHeight) { position, onFocusChanged in
+                    let node = nodes[position]
                     TVFocusButton(radius: 14, scale: 1.02, lift: 0,
                                   action: { enter(node, index: index) },
                                   onFocusChanged: onFocusChanged) { focused in
@@ -166,23 +188,38 @@ struct TVFolderBrowser: View {
                             Image(systemName: node.kind == .source ? "server.rack" : "folder.fill")
                                 .font(.system(size: 34)).foregroundStyle(TVColor.brand).frame(width: 50)
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(Self.title(node)).tvFont(.cardTitle).lineLimit(2)
+                                Text(Self.title(node)).tvFont(.cardTitle).lineLimit(1)
                                 Text(String(format: TVDiscoveryText.string("folder_counts"), node.childNodeCount, node.descendantSongCount))
-                                    .tvFont(.caption).foregroundStyle(TVColor.textMuted)
+                                    .tvFont(.caption).foregroundStyle(TVColor.textMuted).lineLimit(1)
                             }
                             Spacer(minLength: 12)
                             Image(systemName: "chevron.right").tvFont(.caption)
                         }
-                        .padding(24).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(height: folderRowHeight)
                         .background(focused ? TVColor.surfaceStrong : TVColor.card)
                     }
                 }
+                // 换了文件夹就从头分窗,不沿用上一层焦点停过的位置。
+                .id(current?.id)
                 if let current {
                     let visible = store.songIDSet
                     let ids = LibraryFolderBrowsePolicy.trackOrderedSongIDs(
                         in: current.id, scope: .direct, index: index, isVisible: visible.contains
                     )
-                    TVPagedSongIDList(songIDs: ids, alignment: .leading, spacing: 22, action: openPlayer)
+                    TVWindowedList(count: ids.count, rowHeight: songRowHeight) { position, onFocusChanged in
+                        if let song = store.song(ids[position]) {
+                            TVSongRow(
+                                song: song,
+                                queueSongIDs: ids,
+                                action: openPlayer,
+                                onFocusChanged: onFocusChanged,
+                                fixedHeight: songRowHeight
+                            )
+                        }
+                    }
+                    .id(current.id)
                 } else if nodes.isEmpty {
                     TVEmptyState(icon: "folder", title: TVDiscoveryText.string("no_folders"), subtitle: TVDiscoveryText.string("folders_hint"))
                         .frame(minHeight: 350)

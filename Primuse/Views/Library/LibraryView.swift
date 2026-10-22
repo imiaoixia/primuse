@@ -2200,8 +2200,12 @@ private struct GenreDetailView: View {
             LibraryReviewSection(
                 subject: .genre(genre.id),
                 compact: true,
-                onArtwork: true
+                onArtwork: true,
+                style: .detailCard
             )
+            #if os(iOS)
+            .frame(maxWidth: LibraryDetailHeroMetrics.readableWidth, alignment: .leading)
+            #endif
         }
         // 渐变底图铺满整幅屏幕, 文字与按钮按侧留在安全区内 —— 横屏两侧不一定相等。
         .padding(.leading, insets.leading + 20)
@@ -2220,8 +2224,9 @@ private struct GenreDetailView: View {
         .clipped()
     }
 
-    /// 头图底: 整页底色打底, 右上角压那叠代表封面, 再往下化进页面底色 ——
-    /// 接下去的专辑架和歌曲列表用的就是这个颜色, 所以看不出头图在哪儿结束。
+    /// 头图底: 风格配色打底, 右上角压那叠代表封面。iOS 上往下渐隐成透明, 露出整页的网格底色 ——
+    /// 接下去的专辑架和歌曲列表铺的就是那张底色, 所以看不出头图在哪儿结束。
+    @ViewBuilder
     private func heroBackdrop(
         insets: ImmersiveLibraryDetailInsets,
         mosaicWidth: CGFloat,
@@ -2231,27 +2236,13 @@ private struct GenreDetailView: View {
         #if os(iOS)
         let leading = tint.top
         let trailing = tint.bottom
-        let fade = LinearGradient(
-            stops: [
-                .init(color: .black.opacity(0.05), location: 0),
-                .init(color: tint.top.opacity(0.42), location: 0.55),
-                .init(color: tint.top, location: 1),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
         #else
         let palette = GenreVisualStyle.palette(for: genre.id)
         let leading = palette.leading
         let trailing = palette.trailing
-        let fade = LinearGradient(
-            colors: [.black.opacity(0.05), .black.opacity(0.76)],
-            startPoint: .top,
-            endPoint: .bottom
-        )
         #endif
 
-        return LinearGradient(
+        let backdrop = LinearGradient(
             colors: [leading, trailing],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -2264,7 +2255,37 @@ private struct GenreDetailView: View {
                 .opacity(0.8)
                 .accessibilityHidden(true)
         }
-        .overlay { fade }
+
+        #if os(iOS)
+        backdrop
+            .overlay {
+                LinearGradient(
+                    colors: [.black.opacity(0.05), .clear],
+                    startPoint: .top,
+                    endPoint: .center
+                )
+            }
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black.opacity(0.6), location: 0.55),
+                        .init(color: .clear, location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        #else
+        backdrop
+            .overlay {
+                LinearGradient(
+                    colors: [.black.opacity(0.05), .black.opacity(0.76)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        #endif
     }
 
     private var albumShelf: some View {

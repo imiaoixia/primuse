@@ -15,47 +15,87 @@ struct ImmersiveLibraryDetailInsets: Equatable {
     var trailing: CGFloat = 0
 }
 
+/// 详情页头图里的版式尺寸。
+enum LibraryDetailHeroMetrics {
+    /// 封面下面的标题、按钮、简介、评分在 iPad 这类宽画布上收进这么宽的一栏居中，
+    /// 不跟着整幅屏幕拉成几条长胶囊；手机屏比它窄，不受影响。
+    static let readableWidth: CGFloat = 600
+}
+
 #if os(iOS)
 /// 详情页那层随封面变化的整页底色。
 ///
 /// 封面主色不能直接铺满一页：饱和度高的封面会刺眼，亮封面上白字会糊。怎么压深由
-/// `LibraryDetailTintPolicy` 定(规则在 PrimuseKit 里，有测试)，这里只把算好的两段
-/// 颜色接成渐变。头图、列表、页尾共用同一条渐变，页面才是一整块，而不是彩色头顶
-/// 着一块灰底。
+/// `LibraryDetailTintPolicy` 定(规则在 PrimuseKit 里，有测试)。整页底色是一张网格渐变：
+/// 封面切成 3×3 块各取一色、逐点压深，左上偏红、右下偏蓝这样的走向留在页面上，
+/// 不再只是一种颜色从上到下由浅到深。头图、列表、页尾共用这一张，页面才是一整块，
+/// 而不是彩色头顶着一块灰底。
 struct LibraryDetailTintStyle: Equatable {
+    /// 封面主色压深后的页首、页尾两色。按钮字色、紧凑头图这些要一种颜色的地方用它们。
     var top: Color
     var bottom: Color
+    /// 网格底色的格点颜色，行优先排成 `LibraryDetailMeshTint.columns × rows`。
+    var meshColors: [Color]
 
-    /// 上半屏保持头图收尾的那个颜色, 过了头图才慢慢变深 —— 否则头图末端与页面底色
-    /// 在接缝处差着一截, 反而多出一条边。
-    var gradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: top, location: 0),
-                .init(color: top, location: 0.42),
-                .init(color: bottom, location: 1),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
+    /// 格点的位置：中间一行提到头图下沿附近 —— 上半屏保持头图收尾的那几种颜色，过了头图
+    /// 才慢慢变深，头图末端和页面底色之间不会差着一截。中间一列左右错开一点，过渡不是一条直线。
+    static let meshPoints: [SIMD2<Float>] = [
+        [0, 0], [0.5, 0], [1, 0],
+        [0, 0.42], [0.54, 0.46], [1, 0.4],
+        [0, 1], [0.5, 1], [1, 1],
+    ]
+
+    @MainActor
+    var mesh: MeshGradient {
+        MeshGradient(
+            width: LibraryDetailMeshTint.columns,
+            height: LibraryDetailMeshTint.rows,
+            points: Self.meshPoints,
+            colors: meshColors
         )
     }
 
     /// 取不到封面色时的中性底。取色是异步的，颜色到位之前也先用它。
     static func neutral(colorScheme: ColorScheme) -> LibraryDetailTintStyle {
-        style(LibraryDetailTintPolicy.neutralTint(appearance: appearance(for: colorScheme)))
+        let pageAppearance = appearance(for: colorScheme)
+        return style(
+            LibraryDetailTintPolicy.neutralTint(appearance: pageAppearance),
+            mesh: LibraryDetailTintPolicy.neutralMeshTint(appearance: pageAppearance)
+        )
     }
 
-    /// - Parameter artworkColor: `CoverTintProvider` 取到的封面主色。
-    static func artwork(_ artworkColor: Color?, colorScheme: ColorScheme) -> LibraryDetailTintStyle {
+    /// - Parameters:
+    ///   - artworkColor: `CoverTintProvider` 取到的封面主色。
+    ///   - regions: 同一张封面的分块色；没有时(比如风格页拿固定配色兜底)整张网格都用主色。
+    static func artwork(
+        _ artworkColor: Color?,
+        regions: [LibraryDetailTintStop?]? = nil,
+        colorScheme: ColorScheme
+    ) -> LibraryDetailTintStyle {
         guard let artworkColor, let components = artworkColor.hsbComponents else {
             return neutral(colorScheme: colorScheme)
         }
-        return style(LibraryDetailTintPolicy.tint(
+        let pageAppearance = appearance(for: colorScheme)
+        let dominant = LibraryDetailTintStop(
             hue: components.hue,
             saturation: components.saturation,
-            brightness: components.brightness,
-            appearance: appearance(for: colorScheme)
-        ))
+            brightness: components.brightness
+        )
+        return style(
+            LibraryDetailTintPolicy.tint(
+                hue: components.hue,
+                saturation: components.saturation,
+                brightness: components.brightness,
+                appearance: pageAppearance
+            ),
+            mesh: LibraryDetailTintPolicy.meshTint(
+                regions: regions ?? Array(repeating: dominant, count: LibraryDetailMeshTint.stopCount),
+                hue: components.hue,
+                saturation: components.saturation,
+                brightness: components.brightness,
+                appearance: pageAppearance
+            )
+        )
     }
 
     private static func appearance(
@@ -64,8 +104,12 @@ struct LibraryDetailTintStyle: Equatable {
         colorScheme == .dark ? .dark : .light
     }
 
-    private static func style(_ tint: LibraryDetailTint) -> LibraryDetailTintStyle {
-        LibraryDetailTintStyle(top: color(tint.top), bottom: color(tint.bottom))
+    private static func style(_ tint: LibraryDetailTint, mesh: LibraryDetailMeshTint) -> LibraryDetailTintStyle {
+        LibraryDetailTintStyle(
+            top: color(tint.top),
+            bottom: color(tint.bottom),
+            meshColors: mesh.stops.map { color($0) }
+        )
     }
 
     private static func color(_ stop: LibraryDetailTintStop) -> Color {
@@ -113,7 +157,11 @@ private struct LibraryDetailTintModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
     private var style: LibraryDetailTintStyle {
-        .artwork(song.flatMap { coverTints.tint(forSongID: $0.id) }, colorScheme: colorScheme)
+        .artwork(
+            song.flatMap { coverTints.tint(forSongID: $0.id) },
+            regions: song.flatMap { coverTints.meshRegions(forSongID: $0.id) },
+            colorScheme: colorScheme
+        )
     }
 
     func body(content: Content) -> some View {
@@ -244,7 +292,7 @@ struct ImmersiveLibraryDetailScrollView<Header: View, Content: View>: View {
         }
         .background {
             if let tint {
-                tint.gradient.ignoresSafeArea()
+                tint.mesh.ignoresSafeArea()
             } else {
                 Color(.systemGroupedBackground).ignoresSafeArea()
             }
@@ -854,6 +902,14 @@ extension EnvironmentValues {
 }
 
 struct LibraryReviewSection: View {
+    enum Style {
+        /// 星级和评论按钮直接排在页面上(播放页、歌单页)。
+        case plain
+        /// 染色详情页头图里的一张小卡片:和曲目列表同一种半透明质感,标题、星级、评论按钮
+        /// 排在一行里,有评论时下面接一段引文 —— 不再是一排空心星和一颗孤零零的气泡散在头图上。
+        case detailCard
+    }
+
     @Environment(MusicLibrary.self) private var library
     @AppStorage(LibraryReviewPreferences.enabledKey) private var isEnabled = false
 
@@ -862,6 +918,7 @@ struct LibraryReviewSection: View {
     var onArtwork = false
     var foregroundColor: Color? = nil
     var topSpacing: CGFloat = 0
+    var style: Style = .plain
 
     @State private var showsCommentEditor = false
 
@@ -888,57 +945,10 @@ struct LibraryReviewSection: View {
 
     var body: some View {
         if isEnabled {
-            VStack(alignment: .leading, spacing: compact ? 8 : 12) {
-                if !compact {
-                    Label("library_review_title", systemImage: "star.bubble")
-                        .font(.headline)
-                        .foregroundStyle(onArtwork ? Color.white : Color.primary)
-                }
-
-                HStack(spacing: compact ? 5 : 8) {
-                    LibraryReviewRatingPicker(
-                        rating: review?.rating,
-                        foregroundStyle: foregroundColor ?? (onArtwork ? .white : .yellow),
-                        buttonSize: usesCompactControls ? 36 : 30
-                    ) { rating in
-                        library.updateLibraryReview(
-                            for: subject,
-                            rating: rating == review?.rating ? nil : rating,
-                            comment: review?.comment ?? ""
-                        )
-                    }
-
-                    Spacer(minLength: 8)
-
-                    #if os(macOS)
-                    macCommentButton
-                    #else
-                    if usesCompactControls {
-                        commentButton.buttonStyle(.plain)
-                    } else {
-                        commentButton.buttonStyle(.bordered)
-                    }
-                    #endif
-                }
-
-                if let serverName = ratingServerName {
-                    // 别的客户端在服务器上打的分,扫描时读回来的。
-                    Text(String(format: String(localized: "library_review_rating_from_server"), serverName))
-                        .font(.caption2)
-                        .foregroundStyle(foregroundColor?.opacity(0.6) ?? (onArtwork ? Color.white.opacity(0.6) : Color.secondary))
-                        .lineLimit(1)
-                        .padding(.top, compact ? -4 : -6)
-                }
-
-                if let comment = review?.comment, !comment.isEmpty {
-                    Text(verbatim: comment)
-                        .font(compact ? .caption : .subheadline)
-                        .foregroundStyle(foregroundColor?.opacity(0.78) ?? (onArtwork ? Color.white.opacity(0.78) : Color.secondary))
-                        .lineLimit(compact ? 2 : 4)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .contentShape(Rectangle())
-                        .onTapGesture { showsCommentEditor = true }
-                        .accessibilityAddTraits(.isButton)
+            Group {
+                switch style {
+                case .plain: plainBody
+                case .detailCard: detailCard
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -952,6 +962,175 @@ struct LibraryReviewSection: View {
                     .libraryDetailPresentationReset()
             }
         }
+    }
+
+    private func rate(_ rating: Int) {
+        library.updateLibraryReview(
+            for: subject,
+            rating: rating == review?.rating ? nil : rating,
+            comment: review?.comment ?? ""
+        )
+    }
+
+    private var plainBody: some View {
+        VStack(alignment: .leading, spacing: compact ? 8 : 12) {
+            if !compact {
+                Label("library_review_title", systemImage: "star.bubble")
+                    .font(.headline)
+                    .foregroundStyle(onArtwork ? Color.white : Color.primary)
+            }
+
+            HStack(spacing: compact ? 5 : 8) {
+                LibraryReviewRatingPicker(
+                    rating: review?.rating,
+                    foregroundStyle: foregroundColor ?? (onArtwork ? .white : .yellow),
+                    buttonSize: usesCompactControls ? 36 : 30,
+                    onSelect: rate
+                )
+
+                Spacer(minLength: 8)
+
+                #if os(macOS)
+                macCommentButton
+                #else
+                if usesCompactControls {
+                    commentButton.buttonStyle(.plain)
+                } else {
+                    commentButton.buttonStyle(.bordered)
+                }
+                #endif
+            }
+
+            if let serverName = ratingServerName {
+                // 别的客户端在服务器上打的分,扫描时读回来的。
+                Text(String(format: String(localized: "library_review_rating_from_server"), serverName))
+                    .font(.caption2)
+                    .foregroundStyle(foregroundColor?.opacity(0.6) ?? (onArtwork ? Color.white.opacity(0.6) : Color.secondary))
+                    .lineLimit(1)
+                    .padding(.top, compact ? -4 : -6)
+            }
+
+            if let comment = review?.comment, !comment.isEmpty {
+                Text(verbatim: comment)
+                    .font(compact ? .caption : .subheadline)
+                    .foregroundStyle(foregroundColor?.opacity(0.78) ?? (onArtwork ? Color.white.opacity(0.78) : Color.secondary))
+                    .lineLimit(compact ? 2 : 4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showsCommentEditor = true }
+                    .accessibilityAddTraits(.isButton)
+            }
+        }
+    }
+
+    // MARK: 详情页卡片
+
+    /// 卡片标题下面那一行小字:评分是从服务器读回来的就说来自哪儿,否则是几星;没打分时不占这一行。
+    private var detailCardCaption: String? {
+        if let serverName = ratingServerName {
+            return String(format: String(localized: "library_review_rating_from_server"), serverName)
+        }
+        guard let rating = review?.rating else { return nil }
+        return String(format: String(localized: "library_review_star_format"), rating)
+    }
+
+    private var detailCard: some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return VStack(alignment: .leading, spacing: 10) {
+            // 窄屏(SE)和长文案的语言里一行放不下就把标题提到星级上面。
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 10) {
+                    detailCardTitle
+                    Spacer(minLength: 6)
+                    detailCardControls
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    detailCardTitle
+                    HStack(spacing: 6) {
+                        detailCardControls
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+
+            if let comment = review?.comment, !comment.isEmpty {
+                Rectangle()
+                    .fill(.white.opacity(0.12))
+                    .frame(height: 0.5)
+
+                Button {
+                    showsCommentEditor = true
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "quote.opening")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .accessibilityHidden(true)
+                        Text(verbatim: comment)
+                            .font(.footnote)
+                            .lineSpacing(2)
+                            .foregroundStyle(.white.opacity(0.84))
+                            .lineLimit(3)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(Text("library_review_comment_hint"))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.white.opacity(0.09), in: shape)
+        .overlay { shape.stroke(.white.opacity(0.12), lineWidth: 0.5) }
+    }
+
+    private var detailCardTitle: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("library_review_title")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            if let caption = detailCardCaption {
+                Text(verbatim: caption)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var detailCardControls: some View {
+        let hasComment = review?.comment.isEmpty == false
+        return HStack(spacing: 6) {
+            LibraryReviewRatingPicker(
+                rating: review?.rating,
+                foregroundStyle: .white,
+                symbolSize: 16,
+                buttonSize: 30,
+                spacing: 0,
+                emptyOpacity: 0.3,
+                onSelect: rate
+            )
+
+            Button {
+                showsCommentEditor = true
+            } label: {
+                Image(systemName: hasComment ? "text.bubble.fill" : "text.bubble")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(.white.opacity(0.16), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(commentActionKey))
+            .accessibilityHint(Text("library_review_comment_hint"))
+        }
+        .fixedSize()
     }
 
     /// 三元表达式直接写进 `Text`/`Label` 会被推断成 `String`、不走本地化，
@@ -1021,10 +1200,13 @@ struct LibraryReviewRatingPicker: View {
     let foregroundStyle: Color
     var symbolSize: CGFloat = 17
     var buttonSize: CGFloat = 30
+    var spacing: CGFloat = 2
+    /// 没点亮的星有多淡。
+    var emptyOpacity: Double = 0.35
     let onSelect: (Int) -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: spacing) {
             ForEach(1...5, id: \.self) { value in
                 Button {
                     onSelect(value)
@@ -1034,7 +1216,7 @@ struct LibraryReviewRatingPicker: View {
                         .foregroundStyle(
                             value <= (rating ?? 0)
                                 ? foregroundStyle
-                                : foregroundStyle.opacity(0.35)
+                                : foregroundStyle.opacity(emptyOpacity)
                         )
                         .contentTransition(.symbolEffect(.replace))
                         .frame(width: buttonSize, height: buttonSize)

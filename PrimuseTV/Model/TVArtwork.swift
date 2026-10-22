@@ -30,6 +30,9 @@ struct TVArtworkPalette: Codable, Equatable, Sendable {
 
     let primary: RGB
     let secondary: RGB
+    /// 封面切成 3×3 块各取的颜色(行优先,第 0 行是封面顶部),给背景的网格渐变用。
+    /// 已按主色、副色的明暗区间压过:顶行接近主色的亮度,末行接近副色。旧版缓存里没有,读出来是 nil。
+    var regions: [RGB]? = nil
 }
 
 /// 真实封面提色器。图片缩小、像素分析和落盘都在独立 actor / utility task 中完成，
@@ -100,7 +103,9 @@ actor TVArtworkPaletteLoader {
         let signature = Self.signature(of: data)
         latestSignature[artworkKey] = signature
 
-        if let cached = memoryCache[artworkKey], cached.signature == signature {
+        // 旧版缓存只有主色、副色,没有分块色:当作没缓存,重新取一次。
+        if let cached = memoryCache[artworkKey], cached.signature == signature,
+           cached.palette.regions != nil {
             return cached.palette
         }
 
@@ -109,7 +114,7 @@ actor TVArtworkPaletteLoader {
             if let storedData = try? Data(contentsOf: diskURL(for: artworkKey)),
                let stored = try? JSONDecoder().decode(CacheEntry.self, from: storedData) {
                 memoryCache[artworkKey] = stored
-                if stored.signature == signature { return stored.palette }
+                if stored.signature == signature, stored.palette.regions != nil { return stored.palette }
             }
         }
 
@@ -230,7 +235,62 @@ actor TVArtworkPaletteLoader {
         if Self.distance(primary, secondary) < 0.09 {
             secondary = Self.darkerVariant(of: primary)
         }
-        return TVArtworkPalette(primary: primary, secondary: secondary)
+        return TVArtworkPalette(
+            primary: primary,
+            secondary: secondary,
+            regions: meshRegions(of: image, fallback: primary)
+        )
+    }
+
+    /// 封面缩成 `ArtworkMeshSampler` 要的 24×24 再分块取色(分块与 iPhone、Mac 共用 PrimuseKit 那一份),
+    /// 每块再按行压进主色到副色的明暗区间:顶行和主色一样亮,末行和副色一样深 ——
+    /// 背景的网格渐变上浅下深,白字压在哪一块上都读得清。
+    private nonisolated static func meshRegions(
+        of image: CGImage,
+        fallback: TVArtworkPalette.RGB
+    ) -> [TVArtworkPalette.RGB]? {
+        let width = ArtworkMeshSampler.sampleWidth
+        let height = ArtworkMeshSampler.sampleHeight
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        let rendered = pixels.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(
+                data: bytes.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+                    | CGBitmapInfo.byteOrder32Big.rawValue
+            ) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard rendered else { return nil }
+
+        let regions = ArtworkMeshSampler.regions(
+            pixels: pixels,
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow
+        )
+        let rows = LibraryDetailMeshTint.rows
+        return regions.enumerated().map { index, region in
+            guard let region else { return fallback }
+            let rgb = LibraryDetailTintPolicy.rgbComponents(of: region)
+            // 0 是顶行(主色的区间),1 是末行(副色的区间)。
+            let progress = Double(index / LibraryDetailMeshTint.columns) / Double(max(1, rows - 1))
+            func blend(_ top: Double, _ bottom: Double) -> Double { top + (bottom - top) * progress }
+            return normalized(
+                .init(red: rgb.red, green: rgb.green, blue: rgb.blue),
+                minimumLuminance: blend(0.055, 0.025),
+                maximumLuminance: blend(0.22, 0.12),
+                minimumBrightness: blend(0.30, 0.16),
+                maximumBrightness: blend(0.68, 0.48)
+            )
+        }
     }
 
     private nonisolated static func secondaryScore(_ bucket: Bucket,
@@ -399,6 +459,41 @@ actor TVArtworkLoader {
         return cacheDir.appendingPathComponent("\(h).jpg")
     }
 
+    /// 歌曲镜像(按 Song.id 的封面缓存)是电视自己从飞牛音乐复制进去的那份时,记下当时的引用和镜像内容的身份。
+    private func fnMusicMirrorMarkerURL(songID: String) -> URL {
+        let h = SHA256.hash(data: Data("fnmusic-mirror:\(songID)".utf8)).prefix(16)
+            .map { String(format: "%02x", $0) }.joined()
+        return cacheDir.appendingPathComponent("\(h).mirror")
+    }
+
+    /// 飞牛音乐的歌在读服务器之前先看歌曲镜像:刮削写回、从 iPhone / Mac 同步过来的封面都在这里,
+    /// iPhone 也是先读它。只有镜像正是电视上次从飞牛复制的那份(身份对得上)、而歌的引用已经换了
+    /// (服务器换了封面)时才不用它,回源取新的。
+    private func authoritativeSongMirror(songID: String, reference: String) async -> Data? {
+        let assets = MetadataAssetStore.shared
+        guard let identity = assets.coverContentIdentifier(
+            named: assets.expectedCoverFileName(for: songID)
+        ) else { return nil }
+        if let marker = try? String(contentsOf: fnMusicMirrorMarkerURL(songID: songID), encoding: .utf8) {
+            let fields = marker.components(separatedBy: "\n")
+            if fields.count == 2, fields[1] == identity, fields[0] != reference { return nil }
+        }
+        return await assets.cachedCoverData(forSongID: songID)
+    }
+
+    /// 飞牛音乐的封面刚写进歌曲镜像:记下这份镜像属于哪个引用。
+    private func recordFnMusicMirror(songID: String, reference: String) {
+        let assets = MetadataAssetStore.shared
+        guard let identity = assets.coverContentIdentifier(
+            named: assets.expectedCoverFileName(for: songID)
+        ) else { return }
+        try? "\(reference)\n\(identity)".write(
+            to: fnMusicMirrorMarkerURL(songID: songID),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
     /// 按 (artist, album) 取专辑封面 Data;key 用于缓存去重(一般传 albumID)。
     ///
     /// 这是按文本搜索的最后一档,搜到的候选必须对得上专辑名(两边都有歌手时还要
@@ -480,6 +575,15 @@ actor TVArtworkLoader {
         }
 
         if let fnMusicRequestKey {
+            // 刮削过的封面在歌曲镜像里,先于飞牛自己的缓存和服务器读;以前这里没命中就直接回源,
+            // 回源的结果还会盖掉镜像里刮削的那张。
+            if let mirrored = await authoritativeSongMirror(songID: songID, reference: ref) {
+                return await preparedSongArtwork(
+                    mirrored,
+                    songID: songID,
+                    animationCacheKey: animationCacheKey
+                )
+            }
             let disk = diskURL(fnMusicRequestKey)
             if let data = try? Data(contentsOf: disk) {
                 let displayData = await preparedSongArtwork(
@@ -492,6 +596,7 @@ actor TVArtworkLoader {
                     if displayData != data {
                         try? displayData.write(to: disk, options: .atomic)
                     }
+                    recordFnMusicMirror(songID: songID, reference: ref)
                     return displayData
                 }
                 try? FileManager.default.removeItem(at: disk)
@@ -506,7 +611,8 @@ actor TVArtworkLoader {
 
         guard !ref.isEmpty else { return nil }
 
-        if MetadataAssetStore.shared.isLegacyLocalRef(ref),
+        // 本机封面目录里的文件名(不带路径、不是网址),和 iPhone 一样不看扩展名。
+        if !ref.contains("/"), !ref.contains("://"),
            let data = MetadataAssetStore.shared.readCoverData(named: ref),
            Self.isImageData(data) {
             return await preparedSongArtwork(
@@ -542,6 +648,7 @@ actor TVArtworkLoader {
                 animationCacheKey: animationCacheKey
             ) else { return nil }
             try? displayData.write(to: diskURL(fnMusicRequestKey), options: .atomic)
+            recordFnMusicMirror(songID: songID, reference: ref)
             return displayData
         }
 

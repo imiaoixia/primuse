@@ -62,10 +62,19 @@ struct TVSwitchRow: View {
 }
 
 struct TVLibraryReviewControl: View {
+    enum Style {
+        /// 星级和评论按钮直接排在页面上(播放页)。
+        case plain
+        /// 专辑、风格页里的一张卡片:标题、几星(或来自哪个服务器)在左,星级和评论按钮在右,
+        /// 有评论时下面接一段引文 —— 和 iPhone 专辑页的评分卡片同一个排法。
+        case card
+    }
+
     @Environment(TVStore.self) private var store
     @AppStorage(LibraryReviewPreferences.enabledKey) private var isEnabled = false
 
     let subject: LibraryReviewSubject
+    var style: Style = .plain
     @State private var showsCommentEditor = false
 
     private var review: LibraryReview? {
@@ -76,20 +85,10 @@ struct TVLibraryReviewControl: View {
 
     var body: some View {
         if isEnabled {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    ForEach(1...5, id: \.self) { value in
-                        starButton(value)
-                    }
-                    commentButton
-                }
-
-                if let comment = review?.comment, !comment.isEmpty {
-                    Text(verbatim: comment)
-                        .tvFont(.caption)
-                        .foregroundStyle(TVColor.textMuted)
-                        .lineLimit(2)
-                        .frame(maxWidth: 560, alignment: .leading)
+            Group {
+                switch style {
+                case .plain: plainBody
+                case .card: cardBody
                 }
             }
             .fullScreenCover(isPresented: $showsCommentEditor) {
@@ -99,9 +98,93 @@ struct TVLibraryReviewControl: View {
         }
     }
 
+    private var plainBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                ForEach(1...5, id: \.self) { value in
+                    starButton(value)
+                }
+                commentButton
+            }
+
+            if let comment = review?.comment, !comment.isEmpty {
+                Text(verbatim: comment)
+                    .tvFont(.caption)
+                    .foregroundStyle(TVColor.textMuted)
+                    .lineLimit(2)
+                    .frame(maxWidth: 560, alignment: .leading)
+            }
+        }
+    }
+
+    // MARK: 卡片
+
+    /// 评分是从服务器读回来的就说来自哪儿,否则是几星;没打分时不占这一行。
+    private var cardCaption: String? {
+        if let review, review.rating != nil, review.ratingFromServer == true,
+           let sourceID = review.serverRatingTarget?.sourceID,
+           let name = store.source(id: sourceID)?.name, !name.isEmpty {
+            return String(format: String(localized: "library_review_rating_from_server"), name)
+        }
+        guard let rating = review?.rating else { return nil }
+        return String(format: String(localized: "library_review_star_format"), rating)
+    }
+
+    private var cardBody: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 24) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(String(localized: "library_review_title"))
+                        .tvFont(.rowTitle)
+                        .foregroundStyle(TVColor.text)
+                        .lineLimit(1)
+                    if let caption = cardCaption {
+                        Text(verbatim: caption)
+                            .tvFont(.meta)
+                            .foregroundStyle(TVColor.textFaint)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 12)
+                HStack(spacing: 8) {
+                    ForEach(1...5, id: \.self) { value in
+                        starButton(value, side: 50)
+                    }
+                    commentButton
+                        .padding(.leading, 8)
+                }
+                // 卡片里的按钮自成一组:左右键在星级之间走,上下键离开卡片。
+                .focusSection()
+            }
+
+            if let comment = review?.comment, !comment.isEmpty {
+                Rectangle().fill(TVColor.divider).frame(height: 1)
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Image(systemName: "quote.opening")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(TVColor.textFaint)
+                        .accessibilityHidden(true)
+                    Text(verbatim: comment)
+                        .tvFont(.caption)
+                        .foregroundStyle(TVColor.textMuted)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 26)
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(TVColor.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(TVColor.divider, lineWidth: 1)
+        }
+    }
+
     /// 用自绘焦点态代替 `.bordered`:tvOS 的系统按钮样式会盖一层白色平台层,
     /// 和这套暗色主题里的其它按钮长得完全不一样。
-    private func starButton(_ value: Int) -> some View {
+    private func starButton(_ value: Int, side: CGFloat = 54) -> some View {
         let filled = value <= rating
         return TVFocusButton(radius: 12, scale: 1.06, lift: 0, action: {
             store.library.updateLibraryReview(
@@ -111,9 +194,9 @@ struct TVLibraryReviewControl: View {
             )
         }) { focused in
             Image(systemName: filled ? "star.fill" : "star")
-                .font(.system(size: 26, weight: .semibold))
+                .font(.system(size: side * 0.48, weight: .semibold))
                 .foregroundStyle(filled ? TVColor.warn : (focused ? TVColor.text : TVColor.textMuted))
-                .frame(width: 54, height: 54)
+                .frame(width: side, height: side)
                 .background(focused ? TVColor.surfaceStrong : TVColor.surfaceSubtle,
                             in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
@@ -1000,6 +1083,47 @@ extension TVPagedList where Item: Identifiable, ID == Item.ID {
         @ViewBuilder row: @escaping (Int, Item, @escaping (Bool) -> Void) -> Row
     ) {
         self.init(items, id: \.id, alignment: alignment, spacing: spacing, revealing: revealing, row: row)
+    }
+}
+
+/// 按焦点分窗的长列表(资料库 › 目录):每行等高,只摆出焦点前后几十行,上下用同样高的空白撑住整页 ——
+/// 文件夹里几万首歌,交给焦点引擎的也只有这几十个候选;不像 `TVPagedList` 那样越往下翻渲染得越多、
+/// 翻到深处方向键照样变迟钝。焦点前后各摆的行数远大于一屏,连按方向键也走不到空白里。
+///
+/// `row` 拿到的第二个参数必须接到行自身的焦点回调上,窗口靠它跟着焦点走。
+struct TVWindowedList<Row: View>: View {
+    let count: Int
+    /// 每行的高度(不含行距)。行要自己撑满这个高度,见 `TVSongRow.fixedHeight`。
+    let rowHeight: CGFloat
+    var spacing: CGFloat = 22
+    var reach = 40
+    @ViewBuilder let row: (Int, @escaping (Bool) -> Void) -> Row
+
+    /// 焦点所在的行按 `SongListSegmentWindow.focusStride` 取整;同一步里挪动焦点不重算窗口。
+    @State private var anchorRow = 0
+
+    var body: some View {
+        let range = SongListSegmentWindow.range(count: count, focusedRow: anchorRow, reach: reach)
+        let stride = rowHeight + spacing
+        let rowsBelow = count - range.upperBound
+        VStack(alignment: .leading, spacing: 0) {
+            Color.clear
+                .frame(height: CGFloat(range.lowerBound) * stride)
+                .accessibilityHidden(true)
+            ForEach(range, id: \.self) { index in
+                row(index) { focused in
+                    guard focused else { return }
+                    let anchor = SongListSegmentWindow.focusAnchor(index)
+                    if anchor != anchorRow { anchorRow = anchor }
+                }
+                .frame(height: rowHeight)
+                .padding(.bottom, index < count - 1 ? spacing : 0)
+            }
+            // 末行没有行距,窗口外还有行时空白里扣掉它。
+            Color.clear
+                .frame(height: rowsBelow > 0 ? CGFloat(rowsBelow) * stride - spacing : 0)
+                .accessibilityHidden(true)
+        }
     }
 }
 

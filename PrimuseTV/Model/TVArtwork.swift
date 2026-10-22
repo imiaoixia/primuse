@@ -399,6 +399,41 @@ actor TVArtworkLoader {
         return cacheDir.appendingPathComponent("\(h).jpg")
     }
 
+    /// 歌曲镜像(按 Song.id 的封面缓存)是电视自己从飞牛音乐复制进去的那份时,记下当时的引用和镜像内容的身份。
+    private func fnMusicMirrorMarkerURL(songID: String) -> URL {
+        let h = SHA256.hash(data: Data("fnmusic-mirror:\(songID)".utf8)).prefix(16)
+            .map { String(format: "%02x", $0) }.joined()
+        return cacheDir.appendingPathComponent("\(h).mirror")
+    }
+
+    /// 飞牛音乐的歌在读服务器之前先看歌曲镜像:刮削写回、从 iPhone / Mac 同步过来的封面都在这里,
+    /// iPhone 也是先读它。只有镜像正是电视上次从飞牛复制的那份(身份对得上)、而歌的引用已经换了
+    /// (服务器换了封面)时才不用它,回源取新的。
+    private func authoritativeSongMirror(songID: String, reference: String) async -> Data? {
+        let assets = MetadataAssetStore.shared
+        guard let identity = assets.coverContentIdentifier(
+            named: assets.expectedCoverFileName(for: songID)
+        ) else { return nil }
+        if let marker = try? String(contentsOf: fnMusicMirrorMarkerURL(songID: songID), encoding: .utf8) {
+            let fields = marker.components(separatedBy: "\n")
+            if fields.count == 2, fields[1] == identity, fields[0] != reference { return nil }
+        }
+        return await assets.cachedCoverData(forSongID: songID)
+    }
+
+    /// 飞牛音乐的封面刚写进歌曲镜像:记下这份镜像属于哪个引用。
+    private func recordFnMusicMirror(songID: String, reference: String) {
+        let assets = MetadataAssetStore.shared
+        guard let identity = assets.coverContentIdentifier(
+            named: assets.expectedCoverFileName(for: songID)
+        ) else { return }
+        try? "\(reference)\n\(identity)".write(
+            to: fnMusicMirrorMarkerURL(songID: songID),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
     /// 按 (artist, album) 取专辑封面 Data;key 用于缓存去重(一般传 albumID)。
     ///
     /// 这是按文本搜索的最后一档,搜到的候选必须对得上专辑名(两边都有歌手时还要
@@ -480,6 +515,15 @@ actor TVArtworkLoader {
         }
 
         if let fnMusicRequestKey {
+            // 刮削过的封面在歌曲镜像里,先于飞牛自己的缓存和服务器读;以前这里没命中就直接回源,
+            // 回源的结果还会盖掉镜像里刮削的那张。
+            if let mirrored = await authoritativeSongMirror(songID: songID, reference: ref) {
+                return await preparedSongArtwork(
+                    mirrored,
+                    songID: songID,
+                    animationCacheKey: animationCacheKey
+                )
+            }
             let disk = diskURL(fnMusicRequestKey)
             if let data = try? Data(contentsOf: disk) {
                 let displayData = await preparedSongArtwork(
@@ -492,6 +536,7 @@ actor TVArtworkLoader {
                     if displayData != data {
                         try? displayData.write(to: disk, options: .atomic)
                     }
+                    recordFnMusicMirror(songID: songID, reference: ref)
                     return displayData
                 }
                 try? FileManager.default.removeItem(at: disk)
@@ -506,7 +551,8 @@ actor TVArtworkLoader {
 
         guard !ref.isEmpty else { return nil }
 
-        if MetadataAssetStore.shared.isLegacyLocalRef(ref),
+        // 本机封面目录里的文件名(不带路径、不是网址),和 iPhone 一样不看扩展名。
+        if !ref.contains("/"), !ref.contains("://"),
            let data = MetadataAssetStore.shared.readCoverData(named: ref),
            Self.isImageData(data) {
             return await preparedSongArtwork(
@@ -542,6 +588,7 @@ actor TVArtworkLoader {
                 animationCacheKey: animationCacheKey
             ) else { return nil }
             try? displayData.write(to: diskURL(fnMusicRequestKey), options: .atomic)
+            recordFnMusicMirror(songID: songID, reference: ref)
             return displayData
         }
 

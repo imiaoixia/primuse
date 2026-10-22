@@ -1067,24 +1067,58 @@ struct TVArtistDetailView: View {
     let artist: TVArtist
     var openPlayer: () -> Void = {}
 
+    /// 取到的人像:铺在背后虚化成整幅底图(和 iPhone 艺人页的人像海报同一个做法)。
+    @State private var portrait: UIImage?
+    /// 人像的取色。艺人本来只有按 id 派生的配色,有了真实人像就跟着人像变色。
+    @State private var portraitPalette: TVArtworkPalette?
+
     private var songs: [TVSong] { store.songs(forArtistID: artist.id) }
 
     var body: some View {
         // 一次算好:歌曲数、列表、播放全部三处都要用,别让同一次刷新反复扫这个艺人。
-        let artistSongIDs = songs.map(\.id)
+        let artistSongs = songs
+        let artistSongIDs = artistSongs.map(\.id)
+        let albumCount = Set(artistSongs.map(\.albumID).filter { !$0.isEmpty }).count
         ZStack {
-            TVAmbientBackdrop(tint: artist.tint, tint2: artist.tint2, strength: 0.55)
+            TVAmbientBackdrop(
+                tint: portraitPalette?.primary.color ?? artist.tint,
+                tint2: portraitPalette?.secondary.color ?? artist.tint2,
+                mesh: portraitPalette.flatMap(TVLibraryTint.meshColors),
+                strength: 0.55
+            )
+            if let portrait {
+                TVDetailArtworkAmbience(artworkSide: Self.ambienceSide) {
+                    Image(uiImage: portrait)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: Self.ambienceSide, height: Self.ambienceSide)
+                        .clipped()
+                }
+                .transition(.opacity)
+            }
             TVColor.bg.opacity(0.34).ignoresSafeArea()
             HStack(alignment: .top, spacing: 72) {
-                VStack(alignment: .leading, spacing: 24) {
-                    TVArtistArtworkView(artist: artist, size: 280)
-                    Text(artist.name)
-                        .tvFont(.pageTitle)
-                        .foregroundStyle(TVColor.text)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(PMString("ext.tv.songsCount", artistSongIDs.count))
-                        .tvFont(.body)
-                        .foregroundStyle(TVColor.textMuted)
+                VStack(alignment: .leading, spacing: 26) {
+                    // 人像海报:按原图的方形显示,不再裁成一个圆;取到人像后背后铺一层虚化的同一张。
+                    TVArtistArtworkView(artist: artist, size: 320, cornerRadius: 22) { image, data in
+                        withAnimation(.easeInOut(duration: 0.5)) { portrait = image }
+                        let key = "artist:\(artist.id)"
+                        Task { @MainActor in
+                            let palette = await TVArtworkPaletteLoader.shared.palette(for: data, artworkKey: key)
+                            withAnimation(.easeInOut(duration: 0.6)) { portraitPalette = palette }
+                        }
+                    }
+                    .shadow(color: TVColor.focusShadow.opacity(0.55), radius: 24, x: 0, y: 14)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(artist.name)
+                            .tvFont(.pageTitle)
+                            .foregroundStyle(TVColor.text)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(verbatim: Self.summary(songCount: artistSongIDs.count, albumCount: albumCount))
+                            .tvFont(.body)
+                            .foregroundStyle(TVColor.textMuted)
+                    }
                     HStack(spacing: 14) {
                         TVPillButton(
                             title: PMString("ext.tv.home.playAll"),
@@ -1106,6 +1140,7 @@ struct TVArtistDetailView: View {
                     Spacer(minLength: 0)
                 }
                 .frame(width: 440, alignment: .leading)
+                .focusSection()
 
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 10) {
@@ -1134,6 +1169,17 @@ struct TVArtistDetailView: View {
         }
         .onExitCommand { dismiss() }
         .accessibilityIdentifier("tv.artist.detail")
+    }
+
+    private static let ambienceSide: CGFloat = 240
+
+    /// 首数 · 专辑数(没有专辑时只有首数)。
+    private static func summary(songCount: Int, albumCount: Int) -> String {
+        var parts = [PMString("ext.tv.songsCount", songCount)]
+        if albumCount > 0 {
+            parts.append("\(albumCount) \(String(localized: "albums_count"))")
+        }
+        return parts.joined(separator: " \u{00B7} ")
     }
 
     private var insightIdentity: LibraryInsightSubject {
@@ -1222,6 +1268,46 @@ struct TVAlbumDetailPresenter: ViewModifier {
     }
 }
 
+/// 详情页背后那层封面氛围(和 iPhone 专辑页上半屏同一个做法):把左栏那张封面放大、虚化,
+/// 以它为中心铺开,往右化进网格底色 —— 右栏的曲目列表压在它淡掉的那一侧,白字照样读得清。
+/// 只取一张小图放大再糊开:糊掉之后分辨率看不出来。
+struct TVDetailArtworkAmbience<Artwork: View>: View {
+    /// `artwork` 自己的边长;按整页尺寸放大到铺满。
+    let artworkSide: CGFloat
+    /// 封面中心在整页里的位置(按宽高的比例),对着左栏的封面。
+    var center = UnitPoint(x: 0.2, y: 0.3)
+    @ViewBuilder let artwork: () -> Artwork
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let height = geometry.size.height
+            let side = max(width, height) * 1.15
+            artwork()
+                .scaleEffect(side / max(artworkSide, 1))
+                .blur(radius: 70)
+                .saturation(1.2)
+                .opacity(0.55)
+                .position(x: width * center.x, y: height * center.y)
+                .frame(width: width, height: height)
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black.opacity(0.75), location: 0.35),
+                            .init(color: .clear, location: 0.8),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 /// 专辑页:按下专辑封面先看到整张专辑的曲目,从哪一首点下去就从哪一首播,
 /// 整张专辑仍是队列。「全部播放 / 随机播放 / 串烧」与艺人页同一排布。
 /// 专辑页大封面的缓慢浮动:六七秒一个来回地上浮几点、略微放大,投影跟着变远变淡,像离开了
@@ -1285,6 +1371,8 @@ struct TVAlbumDetailView: View {
     @FocusState private var focusedRestoreControl: String?
     @FocusState private var focusedTrackID: String?
     @Namespace private var detailFocus
+    /// 大封面取到了真实图:这时背后才铺虚化的那一层,不然放大的是占位图。
+    @State private var coverResolved = false
 
     private enum RestoreFocus {
         static let button = "restore.button"
@@ -1334,24 +1422,36 @@ struct TVAlbumDetailView: View {
         let hasEditedSongs = hasLocallyScrapedSongs
             || songIDs.contains { store.library.song(id: $0)?.userMetadataEditedAt != nil }
         ZStack {
-            TVAmbientBackdrop(tint: album.tint, tint2: album.tint2, strength: 0.55)
+            TVAmbientBackdrop(tint: album.tint, tint2: album.tint2, mesh: album.mesh, strength: 0.55)
+            if coverResolved {
+                TVDetailArtworkAmbience(artworkSide: 240) {
+                    TVArtworkView(album: album, size: 240, radius: 0)
+                }
+                .transition(.opacity)
+            }
             TVColor.bg.opacity(0.34).ignoresSafeArea()
             HStack(alignment: .top, spacing: 72) {
-                VStack(alignment: .leading, spacing: 22) {
-                    TVArtworkView(album: album, size: 300, radius: 18)
+                VStack(alignment: .leading, spacing: 26) {
+                    TVArtworkView(album: album, size: 300, radius: 18, onResolutionChange: { resolved in
+                        withAnimation(.easeInOut(duration: 0.5)) { coverResolved = resolved }
+                    })
                         .modifier(TVArtworkGentleFloat())
-                    Text(album.title)
-                        .tvFont(.pageTitle)
-                        .foregroundStyle(TVColor.text)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(album.artist)
-                        .tvFont(.body)
-                        .foregroundStyle(TVColor.textMuted)
-                        .lineLimit(2)
-                    Text(verbatim: Self.summary(album: album, songs: songs))
-                        .tvFont(.caption)
-                        .foregroundStyle(TVColor.textFaint)
+                    // 专辑名、艺人、年份与时长是一块:挨得近一点,和下面的按钮拉开。
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(album.title)
+                            .tvFont(.pageTitle)
+                            .foregroundStyle(TVColor.text)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(album.artist)
+                            .tvFont(.body)
+                            .foregroundStyle(TVColor.textMuted)
+                            .lineLimit(2)
+                        Text(verbatim: Self.summary(album: album, songs: songs))
+                            .tvFont(.caption)
+                            .foregroundStyle(TVColor.textFaint)
+                            .padding(.top, 2)
+                    }
                     HStack(spacing: 14) {
                         TVPillButton(
                             title: String(localized: "play_all"),
@@ -1378,6 +1478,7 @@ struct TVAlbumDetailView: View {
                         HStack(spacing: 14) { secondaryActions(songIDs) }
                         VStack(alignment: .leading, spacing: 22) { secondaryActions(songIDs) }
                     }
+                    .padding(.top, -8)
                     // 恢复完按钮仍留着(不再有改过的歌时按下去什么也不做),免得焦点所在的按钮消失。
                     if hasEditedSongs || restoreProgress != nil {
                         restoreSection(songIDs, hasEditedSongs: hasEditedSongs)
@@ -1393,6 +1494,9 @@ struct TVAlbumDetailView: View {
                             subject: Self.insightSubject(album: album, songs: []),
                             details: { Self.insightSubject(album: album, songs: songs, library: store.library) }
                         )
+                        // 评分和 iPhone 专辑页一样排在简介后面、曲目前面,收成一张卡片。
+                        TVLibraryReviewControl(subject: .album(albumID), style: .card)
+                            .padding(.bottom, 14)
                         TVEyebrow(text: PMString("ext.tv.search.songs"))
                             .padding(.bottom, 6)
                         if tracks.isEmpty {

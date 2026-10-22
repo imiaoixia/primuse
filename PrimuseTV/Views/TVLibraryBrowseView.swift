@@ -12,6 +12,8 @@ struct TVBrowseDestination: Identifiable {
     let id: String
     let title: String
     let songIDs: [String]
+    /// 风格页有评分(和 iPhone 风格页一样);排行榜那些合集没有。
+    var reviewSubject: LibraryReviewSubject? = nil
 }
 
 struct TVSongCollectionView: View {
@@ -21,8 +23,16 @@ struct TVSongCollectionView: View {
     var openPlayer: () -> Void = {}
 
     var body: some View {
+        // 底色跟着第一首歌所在专辑的封面走(风格页在 iPhone 上也是取代表曲的封面色)。
+        let representative = destination.songIDs.first.flatMap { store.song($0) }.flatMap { store.albumOf($0) }
         ZStack {
-            TVColor.bg.ignoresSafeArea()
+            if let representative {
+                TVAmbientBackdrop(tint: representative.tint, tint2: representative.tint2,
+                                  mesh: representative.mesh, strength: 0.45)
+                TVColor.bg.opacity(0.4).ignoresSafeArea()
+            } else {
+                TVColor.bg.ignoresSafeArea()
+            }
             HStack(alignment: .top, spacing: 50) {
                 VStack(alignment: .leading, spacing: 24) {
                     Text(destination.title).tvFont(.pageTitle)
@@ -41,8 +51,13 @@ struct TVSongCollectionView: View {
                 .frame(width: 410, alignment: .leading)
                 .focusSection()
                 ScrollView {
-                    TVPagedSongIDList(songIDs: destination.songIDs, spacing: 14, action: finishPlayback)
-                        .padding(18)
+                    VStack(alignment: .leading, spacing: 24) {
+                        if let subject = destination.reviewSubject {
+                            TVLibraryReviewControl(subject: subject, style: .card)
+                        }
+                        TVPagedSongIDList(songIDs: destination.songIDs, spacing: 14, action: finishPlayback)
+                    }
+                    .padding(18)
                 }
                 .focusSection()
             }
@@ -79,7 +94,9 @@ struct TVGenreBrowser: View {
             ) { _, genre, focusChanged in
                 let ids = store.library.songs(forGenre: genre.id).map(\.id)
                 TVFocusButton(radius: 18, scale: 1.03, lift: 0, action: {
-                    destination = TVBrowseDestination(id: genre.id, title: genre.name, songIDs: ids)
+                    destination = TVBrowseDestination(
+                        id: genre.id, title: genre.name, songIDs: ids, reviewSubject: .genre(genre.id)
+                    )
                 }, onFocusChanged: focusChanged) { focused in
                     VStack(alignment: .leading, spacing: 18) {
                         HStack(spacing: 6) {

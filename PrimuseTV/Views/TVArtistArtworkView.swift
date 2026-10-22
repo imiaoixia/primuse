@@ -6,6 +6,10 @@ struct TVArtistArtworkView: View {
     @Environment(TVStore.self) private var store
     let artist: TVArtist
     let size: CGFloat
+    /// 给了就按原图的方形、带这个圆角显示(艺人页的人像海报);默认裁成圆形头像。
+    var cornerRadius: CGFloat? = nil
+    /// 取到头像之后回调:艺人页拿它取色、铺背后的虚化人像。卡片墙上不给,不多做一次取色。
+    var onArtworkLoaded: ((UIImage, Data) -> Void)? = nil
     @State private var image: UIImage?
     @State private var cacheRevision = 0
 
@@ -25,13 +29,16 @@ struct TVArtistArtworkView: View {
 
     var body: some View {
         ZStack {
-            TVCoverArt(tint: artist.tint, tint2: artist.tint2, glyph: artist.glyph, size: size, radius: size / 2)
+            TVCoverArt(tint: artist.tint, tint2: artist.tint2, glyph: artist.glyph, size: size,
+                       radius: cornerRadius ?? size / 2)
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
                     .frame(width: size, height: size)
             }
         }
-        .frame(width: size, height: size).clipShape(Circle())
+        .frame(width: size, height: size)
+        .clipShape(cornerRadius.map { AnyShape(RoundedRectangle(cornerRadius: $0, style: .continuous)) }
+            ?? AnyShape(Circle()))
         .task(id: identity) {
             let requestIdentity = identity
             image = nil
@@ -40,6 +47,7 @@ struct TVArtistArtworkView: View {
             let decoded = await Task.detached(priority: .utility) { UIImage(data: data) }.value
             guard !Task.isCancelled, identity == requestIdentity else { return }
             image = decoded
+            if let decoded { onArtworkLoaded?(decoded, data) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidCache)) { note in
             if note.userInfo?["all"] as? Bool == true || note.userInfo?["artistID"] as? String == artist.id {

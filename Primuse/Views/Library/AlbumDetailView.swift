@@ -16,6 +16,9 @@ struct AlbumDetailView: View {
     @Environment(\.pmHeightClass) private var heightClass
     /// 系统工具栏竖排到侧边时(iPhone Duo)非 nil:工具栏按钮带上标题,收进系统溢出菜单时看得懂。
     @Environment(\.pmVerticalBarEdge) private var verticalBarEdge
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// 头图排在 iPhone Duo 两栏的左栏里:栏很窄,封面不跟着常规宽度放大。
+    @Environment(\.libraryDetailActionsAdapt) private var heroInNarrowColumn
     @Environment(CoverTintProvider.self) private var coverTints
     @Environment(\.colorScheme) private var colorScheme
     #elseif os(macOS)
@@ -298,24 +301,28 @@ struct AlbumDetailView: View {
     }
 
     /// 头图改成「封面浮在整页底色上」: 封面居中, 标题、信息、按钮顺着往下, 页面其余
-    /// 部分继续用同一条渐变 —— 原来那种卡片贴在系统灰底上的接缝没有了。
+    /// 部分继续用同一张网格底色 —— 原来那种卡片贴在系统灰底上的接缝没有了。
     ///
     /// 手机横屏只剩三百多点高, 封面、间距、留白各降一档并改成封面在左的一行,
     /// 头图压到 190pt 以内, 首屏才露得出歌。
     ///
     /// 简介照影片介绍页的位置放在播放键下面: 风格、几行摘录, 点「更多」就地展开全文。
+    /// 评分收成一张和曲目列表同一种质感的小卡片, 放在简介后面、曲目前面。
+    ///
+    /// iPad 这类宽画布上封面放大一档, 封面以下各块收进一栏可读宽度居中, 不跟着整幅屏幕拉长。
     private func iosHero(insets: ImmersiveLibraryDetailInsets) -> some View {
         let compact = heightClass.isCompact
         // 无障碍字号下横排放不下, 一律回到竖排居中。
         let stacksIdentity = !compact || dynamicTypeSize.isAccessibilitySize
-        let coverSide: CGFloat = compact ? 88 : 190
-        let heroTopPadding: CGFloat = compact ? 18 : 52
-        let heroBottomPadding: CGFloat = compact ? 16 : 26
+        let enlargesCover = !compact && horizontalSizeClass == .regular && !heroInNarrowColumn
+        let coverSide: CGFloat = compact ? 88 : (enlargesCover ? 240 : 196)
+        let heroTopPadding: CGFloat = compact ? 18 : 48
+        let heroBottomPadding: CGFloat = compact ? 16 : 22
         let blockSpacing: CGFloat = compact ? 14 : 18
 
         return VStack(alignment: stacksIdentity ? .center : .leading, spacing: blockSpacing) {
             if stacksIdentity {
-                VStack(spacing: 14) {
+                VStack(spacing: 18) {
                     heroCover(side: coverSide)
                     heroIdentityText(centered: true)
                 }
@@ -334,6 +341,7 @@ struct AlbumDetailView: View {
                 shuffle: shuffleAll,
                 favorite: albumFavorite
             )
+            .padding(.top, compact ? 0 : 2)
 
             LibraryInsightSynopsis(
                 subject: insightIdentity,
@@ -342,8 +350,11 @@ struct AlbumDetailView: View {
                 compact: compact
             )
 
-            LibraryReviewSection(subject: .album(album.id), compact: true, onArtwork: true)
+            LibraryReviewSection(subject: .album(album.id), compact: true, onArtwork: true, style: .detailCard)
         }
+        // 手机横屏是封面在左的一行, 贴着左侧安全区排, 不收进居中的一栏(底图的光晕按左缘对位)。
+        .frame(maxWidth: stacksIdentity ? LibraryDetailHeroMetrics.readableWidth : .infinity)
+        .frame(maxWidth: .infinity)
         // 底色铺满整幅屏幕, 文字与按钮按侧留在安全区内 —— 横屏两侧安全区不一定相等。
         .padding(.leading, insets.leading + 20)
         .padding(.trailing, insets.trailing + 20)
@@ -433,7 +444,7 @@ struct AlbumDetailView: View {
     }
 
     private func heroIdentityText(centered: Bool) -> some View {
-        VStack(alignment: centered ? .center : .leading, spacing: 6) {
+        VStack(alignment: centered ? .center : .leading, spacing: 5) {
             Text(album.title)
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
@@ -442,13 +453,14 @@ struct AlbumDetailView: View {
                 .shadow(color: .black.opacity(0.22), radius: 12, y: 2)
 
             Text(album.artistName ?? String(localized: "unknown_artist"))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.82))
+                .font(.headline)
+                .foregroundStyle(.white.opacity(0.86))
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(verbatim: heroMetaLine)
-                .font(.caption)
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.white.opacity(0.62))
+                .padding(.top, 1)
         }
         .multilineTextAlignment(centered ? .center : .leading)
         .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)

@@ -2200,8 +2200,12 @@ private struct GenreDetailView: View {
             LibraryReviewSection(
                 subject: .genre(genre.id),
                 compact: true,
-                onArtwork: true
+                onArtwork: true,
+                style: .detailCard
             )
+            #if os(iOS)
+            .frame(maxWidth: LibraryDetailHeroMetrics.readableWidth, alignment: .leading)
+            #endif
         }
         // 渐变底图铺满整幅屏幕, 文字与按钮按侧留在安全区内 —— 横屏两侧不一定相等。
         .padding(.leading, insets.leading + 20)

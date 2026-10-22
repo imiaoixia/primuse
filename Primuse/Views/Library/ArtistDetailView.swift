@@ -357,6 +357,8 @@ struct ArtistDetailView: View {
     /// 竖屏:人像海报铺满上半屏,名字压在海报下沿居中,海报往下渐隐进整页底色(2.0 经典版式的艺人头图)。
     /// 手机横屏只剩三百多点高,海报会把热门单曲挤出首屏,还是一条矮的信息带:头像、名字、首数。
     /// 横竖切换只换上半截;按钮与简介(挂着菜单和弹页)的位置不变。简介照影片介绍页放在播放键下面。
+    ///
+    /// 海报下面的按钮与简介在 iPad 这类宽画布上收在一栏可读宽度里居中, 不跟着整幅屏幕拉成三条长胶囊。
     private func iosHero(insets: ImmersiveLibraryDetailInsets) -> some View {
         let compact = heightClass.isCompact
         return VStack(alignment: .leading, spacing: 0) {
@@ -369,7 +371,7 @@ struct ArtistDetailView: View {
                 posterIdentity(insets: insets)
             }
 
-            VStack(alignment: .leading, spacing: compact ? 12 : 18) {
+            VStack(alignment: .leading, spacing: compact ? 12 : 16) {
                 LibraryDetailPlayShuffleRow(
                     playDisabled: playableSongs.isEmpty,
                     shuffleDisabled: playableSongs.count < 2,
@@ -385,11 +387,14 @@ struct ArtistDetailView: View {
                     compact: compact
                 )
             }
+            // 手机横屏的矮信息带贴着左侧排, 按钮跟着它, 不收进居中的一栏。
+            .frame(maxWidth: compact ? .infinity : LibraryDetailHeroMetrics.readableWidth)
+            .frame(maxWidth: .infinity)
             // 底图铺满整幅屏幕, 文字与按钮按侧留在安全区内 —— 横屏两侧安全区不一定相等。
             .padding(.leading, insets.leading + 20)
             .padding(.trailing, insets.trailing + 20)
-            .padding(.top, compact ? 12 : 6)
-            .padding(.bottom, compact ? 14 : 24)
+            .padding(.top, compact ? 12 : 14)
+            .padding(.bottom, compact ? 14 : 22)
         }
         .frame(maxWidth: .infinity)
         .background {
@@ -398,11 +403,18 @@ struct ArtistDetailView: View {
         .clipped()
     }
 
-    /// 海报高度:去掉顶部安全区后取首屏的六成多,夹在 260–440 之间,再把顶部安全区加回来 ——
-    /// 名字和操作行在 SE 这样的矮屏上也留在首屏里。
+    /// 海报高度:去掉顶部安全区后取首屏的六成多,夹在 260–440 之间(iPad 这类高画布放宽到 560),
+    /// 再把顶部安全区加回来 —— 名字和操作行在 SE 这样的矮屏上也留在首屏里。
     private static func posterHeight(containerHeight: CGFloat, topInset: CGFloat) -> CGFloat {
-        topInset + min(max((containerHeight - topInset) * 0.62, 260), 440)
+        let available = containerHeight - topInset
+        let ceiling: CGFloat = available > 900 ? 560 : 440
+        return topInset + min(max(available * 0.62, 260), ceiling)
     }
+
+    /// 海报比这个宽高比还宽(iPad、外接屏)时,人像不再铺满整幅:方图铺满会被裁成一条横带,
+    /// 头顶和下巴都没了、放大得发虚。这时整幅铺一层虚化的人像, 清晰的人像按原比例摆在中间,
+    /// 左右羽化进虚化层里。手机竖屏的海报比方形窄, 照旧铺满。
+    private static let posterFullBleedMaximumAspect: CGFloat = 1.15
 
     private var artistSummaryText: String {
         "\(songs.count) \(String(localized: "songs_count")) · \(albumCount) \(String(localized: "albums_count"))"
@@ -417,13 +429,7 @@ struct ArtistDetailView: View {
                 }
                 .background {
                     GeometryReader { geometry in
-                        ArtistArtworkView(
-                            artist: artist,
-                            size: max(geometry.size.width, geometry.size.height),
-                            cornerRadius: 0
-                        )
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
+                        posterArtwork(size: geometry.size)
                     }
                     // 下半段渐隐成透明, 整页底色透上来, 看不出海报在哪儿结束。
                     .mask {
@@ -452,25 +458,74 @@ struct ArtistDetailView: View {
                     .accessibilityHidden(true)
                 }
 
-            VStack(spacing: 8) {
-                Text(verbatim: displayArtistName)
-                    .font(.largeTitle.weight(.heavy))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.7)
-                    .shadow(color: .black.opacity(0.22), radius: 12, y: 2)
-
-                Text(verbatim: "\(monthlyListenText) · \(artistSummaryText)")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.78))
-                    .multilineTextAlignment(.center)
-            }
-            .padding(.leading, insets.leading + 24)
-            .padding(.trailing, insets.trailing + 24)
-            .padding(.bottom, 12)
+            posterCaption
+                .frame(maxWidth: LibraryDetailHeroMetrics.readableWidth)
+                .padding(.leading, insets.leading + 24)
+                .padding(.trailing, insets.trailing + 24)
+                .padding(.bottom, 16)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// 海报下沿的名字与数字:名字一行(长名字两行), 下面一行是本月播放、首数与专辑数,
+    /// 用细点隔开, 不再挤成一串文字。
+    private var posterCaption: some View {
+        VStack(spacing: 6) {
+            Text(verbatim: displayArtistName)
+                .font(.largeTitle.weight(.heavy))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .shadow(color: .black.opacity(0.28), radius: 14, y: 2)
+
+            Text(verbatim: "\(monthlyListenText) \u{00B7} \(artistSummaryText)")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.8))
+                .multilineTextAlignment(.center)
+                .shadow(color: .black.opacity(0.2), radius: 8, y: 1)
+        }
+    }
+
+    /// 海报的画面。窄画布(手机竖屏)人像按方图铺满再裁两边; 宽画布见 `posterFullBleedMaximumAspect`。
+    @ViewBuilder
+    private func posterArtwork(size: CGSize) -> some View {
+        if size.width > size.height * Self.posterFullBleedMaximumAspect {
+            let blurSide: CGFloat = 200
+            ZStack {
+                // 只取一张小图放大再糊开:糊掉之后分辨率看不出来。
+                ArtistArtworkView(artist: artist, size: blurSide, cornerRadius: 0, showsPlaceholder: false)
+                    .scaleEffect(max(size.width, size.height) * 1.3 / blurSide)
+                    .blur(radius: 28)
+                    .saturation(1.2)
+                    .colorMultiply(Color(white: 0.6))
+                    .frame(width: size.width, height: size.height)
+
+                ArtistArtworkView(artist: artist, size: size.height, cornerRadius: 0)
+                    .mask {
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black, location: 0.22),
+                                .init(color: .black, location: 0.78),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    }
+            }
+            .frame(width: size.width, height: size.height)
+            .clipped()
+        } else {
+            ArtistArtworkView(
+                artist: artist,
+                size: max(size.width, size.height),
+                cornerRadius: 0
+            )
+            .frame(width: size.width, height: size.height)
+            .clipped()
+        }
     }
 
     /// 手机横屏的矮信息带:头像在左, 名字与首数在右; 无障碍字号下排不下就上下排。
